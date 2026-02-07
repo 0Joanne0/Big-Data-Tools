@@ -95,8 +95,7 @@ app_footer <- function() {
   )
 }
 
-navbarPage(
-  shinyjs::useShinyjs(),
+ui <- navbarPage(
   title = div(class = "logo-container",
               img(src = "icons/logo-brand.webp",
                   height = "55px", style = "margin-right:15px;"),
@@ -107,17 +106,20 @@ navbarPage(
   id = "nav",
   position = "fixed-top",
   windowTitle = "Data Career Navigator",
-  header = tags$head(
-    # Polices : Roboto + Poppins + Fira Code + Source Code Pro + Inter + Madani Arabic (Google Fonts)
-    tags$link(href = "https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Poppins:wght@700;800;900&family=Fira+Code:wght@400;600&family=Source+Code+Pro:wght@400;600;700;800;900&family=Inter:wght@400;600;700;800&family=Madani+Arabic:wght@400;600;700&display=swap",
-              rel  = "stylesheet"
-    ),
-    # Police : Open Sauce One (Fontsource via unpkg)
-    tags$link(href = "https://unpkg.com/@fontsource/open-sauce-one@latest/index.css",
-              rel  = "stylesheet"),
-    # CSS et JS du projet
-    tags$link(rel = "stylesheet", type = "text/css", href = "style.css"),
-    tags$script(src = "script.js")
+  header = tagList(
+    shinyjs::useShinyjs(),
+    tags$head(
+      # Polices : Roboto + Poppins + Fira Code + Source Code Pro + Inter + Madani Arabic (Google Fonts)
+      tags$link(href = "https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Poppins:wght@700;800;900&family=Fira+Code:wght@400;600&family=Source+Code+Pro:wght@400;600;700;800;900&family=Inter:wght@400;600;700;800&family=Madani+Arabic:wght@400;600;700&display=swap",
+                rel  = "stylesheet"
+      ),
+      # Police : Open Sauce One (Fontsource via unpkg)
+      tags$link(href = "https://unpkg.com/@fontsource/open-sauce-one@latest/index.css",
+                rel  = "stylesheet"),
+      # CSS et JS du projet
+      tags$link(rel = "stylesheet", type = "text/css", href = "style.css"),
+      tags$script(src = "script.js")
+    )
   ),
   footer = app_footer(),
   
@@ -862,6 +864,8 @@ navbarPage(
            )
   )
 )
+
+ui
 
 
 
