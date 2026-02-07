@@ -318,6 +318,28 @@ format_postal_code <- function(x) {
   ""
 }
 
+# Centroïdes (lat/lng) par code postal (améliore la carte sans API externe)
+# - Utilisé pour imputer des coordonnées manquantes à partir du CP quand dispo
+cp_centroids <- (function(df){
+  if (is.null(df) || nrow(df) == 0) return(data.table::data.table())
+  need <- c("Code_Postal","Latitude","Longitude")
+  if (!all(need %in% names(df))) return(data.table::data.table())
+  
+  tmp <- data.table::copy(df)
+  tmp[, cp_fmt := vapply(Code_Postal, format_postal_code, character(1))]
+  tmp <- tmp[nzchar(cp_fmt) & is.finite(Latitude) & is.finite(Longitude)]
+  if (nrow(tmp) == 0) return(data.table::data.table())
+  
+  out <- tmp[, .(
+    Latitude_cp  = stats::median(Latitude, na.rm = TRUE),
+    Longitude_cp = stats::median(Longitude, na.rm = TRUE),
+    n_cp = .N
+  ), by = cp_fmt]
+  
+  # On garde même n_cp=1 : utile si une offre est la seule connue dans la zone
+  out
+})(jobs_df)
+
 # Pastilles : comparaison souple (SQL vs Sql, etc.)
 norm_txt <- function(x) tolower(trimws(as.character(x)))
 
@@ -2419,6 +2441,36 @@ server <- function(input, output, session) {
     d <- mp_sorted_jobs()
     if (is.null(d) || nrow(d) == 0) return(d)
     if (!has_col(d, "Latitude") || !has_col(d, "Longitude")) return(d[0])
+    
+    # Copie + imputation des coords manquantes via CP (si possible)
+    d <- data.table::copy(d)
+    d[, .lat0 := Latitude]
+    d[, .lng0 := Longitude]
+    
+    if (has_col(d, "Code_Postal") && nrow(cp_centroids) > 0) {
+      d[, cp_fmt := vapply(Code_Postal, format_postal_code, character(1))]
+      d <- merge(d, cp_centroids, by = "cp_fmt", all.x = TRUE, sort = FALSE)
+      
+      # Remplit Latitude/Longitude si manquantes mais CP connu
+      d[!is.finite(Latitude)  & is.finite(Latitude_cp),  Latitude  := Latitude_cp]
+      d[!is.finite(Longitude) & is.finite(Longitude_cp), Longitude := Longitude_cp]
+      
+      d[, Latitude_cp := NULL]
+      d[, Longitude_cp := NULL]
+      d[, n_cp := NULL]
+    } else {
+      d[, cp_fmt := ""]
+    }
+    
+    d[, coord_src := dplyr::case_when(
+      is.finite(.lat0) & is.finite(.lng0) ~ "exact",
+      is.finite(Latitude) & is.finite(Longitude) ~ "cp",
+      TRUE ~ "none"
+    )]
+    
+    d[, .lat0 := NULL]
+    d[, .lng0 := NULL]
+    
     d <- d[is.finite(Latitude) & is.finite(Longitude)]
     d
   })
@@ -2429,8 +2481,9 @@ server <- function(input, output, session) {
       d <- mp_map_data()
       
       m <- leaflet::leaflet() %>%
-        leaflet::addProviderTiles(leaflet::providers$OpenStreetMap) %>%
-        leaflet::setView(lng = 2.2137, lat = 46.2276, zoom = 5)
+        leaflet::addProviderTiles(leaflet::providers$CartoDB.Positron) %>%
+        leaflet::setView(lng = 2.2137, lat = 46.2276, zoom = 5) %>%
+        leaflet::addScaleBar(position = "bottomleft")
       
       n <- if (is.null(d)) 0 else nrow(d)
       m <- m %>% leaflet::addControl(
@@ -2442,40 +2495,87 @@ server <- function(input, output, session) {
         title <- if (has_col(d, "Job_Title")) as.character(d$Job_Title) else ""
         comp  <- if (has_col(d, "Company"))   as.character(d$Company)   else ""
         loc   <- if (has_col(d, "Location"))  as.character(d$Location)  else ""
+        cp    <- if (has_col(d, "Code_Postal")) vapply(d$Code_Postal, format_postal_code, character(1)) else rep("", n)
+        mp    <- if (has_col(d, "mp_match")) as.numeric(d$mp_match) else rep(NA_real_, n)
         
-        popup <- mapply(function(id, t, c, l){
+        # Couleur selon match
+        pal <- leaflet::colorNumeric(
+          palette = c("#ef4444", "#f59e0b", "#10b981"),
+          domain = mp,
+          na.color = "#94a3b8"
+        )
+        
+        # Rayon & opacité légèrement différents si coords imputées via CP
+        coord_src <- if (has_col(d, "coord_src")) as.character(d$coord_src) else rep("exact", n)
+        rad <- ifelse(coord_src == "cp", 5.5, 7)
+        op  <- ifelse(coord_src == "cp", 0.65, 0.85)
+        
+        popup <- mapply(function(id, t, c, l, cp1, mm, src){
           t <- ifelse(is.na(t), "", t)
           c <- ifelse(is.na(c), "", c)
           l <- ifelse(is.na(l), "", l)
+          cp1 <- ifelse(is.na(cp1), "", cp1)
+          mm <- ifelse(is.na(mm) | !is.finite(mm), NA_real_, mm)
+          
+          match_line <- if (is.finite(mm)) paste0("<div><b>Match :</b> ", round(mm), "%</div>") else ""
+          cp_line <- if (nzchar(cp1)) paste0("<div><b>CP :</b> ", htmltools::htmlEscape(cp1), "</div>") else ""
+          src_line <- if (identical(src, "cp")) "<div style='opacity:.75'><i>Coordonnées approximées (centroïde CP)</i></div>" else ""
           paste0(
             "<div class='map-popup' onclick=\"Shiny.setInputValue('open_offer', ", id, ", {priority:'event'})\">",
             "<b>", htmltools::htmlEscape(t), "</b><br>",
             htmltools::htmlEscape(c), "<br>",
             htmltools::htmlEscape(l),
+            match_line,
+            cp_line,
+            src_line,
             "</div>"
           )
-        }, d$id, title, comp, loc, SIMPLIFY = TRUE, USE.NAMES = FALSE)
+        }, d$id, title, comp, loc, cp, mp, coord_src, SIMPLIFY = TRUE, USE.NAMES = FALSE)
         
         label_vec <- if (has_col(d, "Job_Title")) as.character(d$Job_Title) else NULL
+        label_vec <- if (!is.null(label_vec)) {
+          mapply(function(t, mm){
+            t <- ifelse(is.na(t), "", t)
+            if (is.finite(mm)) paste0(t, " — ", round(mm), "% match") else t
+          }, label_vec, mp, SIMPLIFY = TRUE, USE.NAMES = FALSE)
+        } else NULL
         
         m <- m %>% leaflet::addCircleMarkers(
           data = d,
           lng = ~Longitude, lat = ~Latitude,
-          radius = 6,
-          stroke = TRUE, weight = 1,
-          fillOpacity = 0.8,
+          radius = rad,
+          stroke = TRUE, weight = 1.2, color = "#ffffff",
+          fillColor = pal(mp),
+          fillOpacity = op,
           popup = popup,
           label = label_vec,
           group = "jobs_pts",
           clusterOptions = CLUSTER_OPTS,
           popupOptions = leaflet::popupOptions(className = "job-popup")
         )
+        
+        # Centrage auto sur les offres recommandées
+        m <- m %>% leaflet::fitBounds(
+          lng1 = min(d$Longitude, na.rm = TRUE),
+          lat1 = min(d$Latitude,  na.rm = TRUE),
+          lng2 = max(d$Longitude, na.rm = TRUE),
+          lat2 = max(d$Latitude,  na.rm = TRUE)
+        )
+        
+        # Légende
+        m <- m %>% leaflet::addLegend(
+          position = "bottomright",
+          pal = pal,
+          values = mp,
+          title = "Score Match (%)",
+          opacity = 1
+        )
       }
       
       m
     }, error = function(e){
       leaflet::leaflet() %>%
-        leaflet::addProviderTiles(leaflet::providers$OpenStreetMap) %>%
+        leaflet::addProviderTiles(leaflet::providers$CartoDB.Positron) %>%
         leaflet::setView(lng = 2.2137, lat = 46.2276, zoom = 5) %>%
         leaflet::addControl(
           html = paste0("<div class='map-count'>Erreur carte : ", htmltools::htmlEscape(conditionMessage(e)), "</div>"),
