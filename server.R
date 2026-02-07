@@ -1857,13 +1857,7 @@ server <- function(input, output, session) {
       return()
     }
     
-    # Fichier sélectionné mais upload pas encore prêt >> pas de rouge, pas de spinner
-    if (!has_path) {
-      session$sendCustomMessage("mpCvError", list(on = FALSE))
-      return()
-    }
-    
-    # 3) CV OK -> on enlève l'erreur + on lance le spinner
+    # CV sélectionné -> on enlève l'erreur + on lance le spinner
     session$sendCustomMessage("mpCvError", list(on = FALSE))
     session$sendCustomMessage("mpLoading", TRUE)
     
@@ -1899,9 +1893,37 @@ server <- function(input, output, session) {
     if (isTRUE(input$mp_source_wttj)) src <- c(src, "Welcome to the Jungle")
     applied_mp$mp_source <- src
     
-    # Parse CV (on est sûr que cv_path existe ici)
+    # Parse CV (si upload prêt et fichier accessible)
     vocab <- sort(unique(split_tokens(jobs_df$Hard_Skills)))
-    rv$mp_cv_terms <- extract_skills_from_cv(cv_path, vocab)
+    
+    if (!has_path) {
+      rv$mp_cv_terms <- character(0)
+      shiny::showNotification(
+        "CV en cours d’upload ou non accessible : l’analyse démarre sans lecture du PDF. Réessayez dans quelques secondes si besoin.",
+        type = "warning",
+        duration = 7
+      )
+    } else {
+      rv$mp_cv_terms <- tryCatch(
+        extract_skills_from_cv(cv_path, vocab),
+        error = function(e) {
+          shiny::showNotification(
+            paste0("Impossible de lire le PDF (pdftools / fichier). Détails : ", conditionMessage(e)),
+            type = "error",
+            duration = 10
+          )
+          character(0)
+        }
+      )
+      
+      if (!requireNamespace("pdftools", quietly = TRUE)) {
+        shiny::showNotification(
+          "Le package 'pdftools' n’est pas installé : l’analyse ne peut pas extraire les skills du CV.",
+          type = "warning",
+          duration = 10
+        )
+      }
+    }
     
     rv$mp_run_ok <- input$mp_run
     
@@ -2256,128 +2278,140 @@ server <- function(input, output, session) {
 
   # Compteur recommandations
   output$mp_count <- renderText({
-    if (!(rv$mp_run_ok > 0)) return("Lancez l’analyse pour voir les recommandations")
-    d <- mp_sorted_jobs()
-    n <- if (is.null(d)) 0 else nrow(d)
-    paste(n, "offres recommandées")
+    tryCatch({
+      if (!(rv$mp_run_ok > 0)) return("Lancez l’analyse pour voir les recommandations")
+      d <- mp_sorted_jobs()
+      n <- if (is.null(d)) 0 else nrow(d)
+      paste(n, "offres recommandées")
+    }, error = function(e){
+      paste0("Erreur recommandations : ", conditionMessage(e))
+    })
   })
 
   # Liste recommandations ------------------------------------------------------
   output$mp_results_list <- renderUI({
-    if (!(rv$mp_run_ok > 0)) {
-      return(div(class = "fav-empty", "Déposez votre CV puis cliquez sur “LANCER L'ANALYSE” pour obtenir vos recommandations."))
-    }
-    
-    d <- mp_sorted_jobs()
-    if (is.null(d) || nrow(d) == 0) return(h4("Aucune recommandation avec ces critères."))
-    
-    start <- (rv$mp_page - 1) * PER_PAGE + 1
-    end   <- min(start + PER_PAGE - 1, nrow(d))
-    dd <- d[start:end]
-    
-    tagList(
-      lapply(seq_len(nrow(dd)), function(i){
-        job <- dd[i]
+    tryCatch({
+      if (!(rv$mp_run_ok > 0)) {
+        return(div(class = "fav-empty", "Déposez votre CV puis cliquez sur “LANCER L'ANALYSE” pour obtenir vos recommandations."))
+      }
+      
+      d <- mp_sorted_jobs()
+      if (is.null(d) || nrow(d) == 0) return(h4("Aucune recommandation avec ces critères."))
+      
+      start <- (rv$mp_page - 1) * PER_PAGE + 1
+      end   <- min(start + PER_PAGE - 1, nrow(d))
+      dd <- d[start:end]
+      
+      tagList(
+        lapply(seq_len(nrow(dd)), function(i){
+          job <- dd[i]
         
-        title <- pick_col(job, c("Job_Title","Title"))
-        comp  <- pick_col(job, c("Company","Company_Name"))
-        loc   <- pick_col(job, c("Location","City","Region"))
-        cp_raw <- pick_col(job, c("Code_Postal","CP","Postal_Code"))
-        cp_fmt <- format_postal_code(cp_raw)
-        loc_txt <- paste0(loc, if (nzchar(cp_fmt)) paste0(" (", cp_fmt, ")") else "")
+          title <- pick_col(job, c("Job_Title","Title"))
+          comp  <- pick_col(job, c("Company","Company_Name"))
+          loc   <- pick_col(job, c("Location","City","Region"))
+          cp_raw <- pick_col(job, c("Code_Postal","CP","Postal_Code"))
+          cp_fmt <- format_postal_code(cp_raw)
+          loc_txt <- paste0(loc, if (nzchar(cp_fmt)) paste0(" (", cp_fmt, ")") else "")
         
-        ct    <- pick_col(job, c("Contract_Type","Contract"))
-        ago   <- if (has_col(job, "Publish_Date")) posted_ago_txt(job$Publish_Date) else ""
-        sources <- get_offer_sources(job)
+          ct    <- pick_col(job, c("Contract_Type","Contract"))
+          ago   <- if (has_col(job, "Publish_Date")) posted_ago_txt(job$Publish_Date) else ""
+          sources <- get_offer_sources(job)
         
-        pay <- format_pay(job)
-        pay_txt <- if (nzchar(pay$txt)) paste0(pay$txt, " € / ", pay$unit) else ""
+          pay <- format_pay(job)
+          pay_txt <- if (nzchar(pay$txt)) paste0(pay$txt, " € / ", pay$unit) else ""
         
-        hs <- unique(split_tokens(pick_col(job, c("Hard_Skills"))))
-        hs <- head(hs, 3)
+          hs <- unique(split_tokens(pick_col(job, c("Hard_Skills"))))
+          hs <- head(hs, 3)
         
-        adv_col <- c("Benefits","Advantages","Perks")[c("Benefits","Advantages","Perks") %in% names(jobs_df)][1]
-        adv <- if (!is.na(adv_col)) unique(split_tokens(pick_col(job, adv_col))) else character(0)
-        adv <- head(adv, 3)
+          adv_col <- c("Benefits","Advantages","Perks")[c("Benefits","Advantages","Perks") %in% names(jobs_df)][1]
+          adv <- if (!is.na(adv_col)) unique(split_tokens(pick_col(job, adv_col))) else character(0)
+          adv <- head(adv, 3)
         
-        is_fav <- as.numeric(job$id) %in% rv$favorites
+          is_fav <- as.numeric(job$id) %in% rv$favorites
         
-        contract_active <- !is.null(applied_mp$mp_contract) && applied_mp$mp_contract != "Tous"
-        remote_active   <- isTRUE(applied_mp$mp_remote)
-        salary_active   <- isTRUE(applied_mp$mp_salary_only)
-        hard_active     <- length(applied_mp$mp_hard_skills) > 0
-        adv_active      <- length(applied_mp$mp_advantages) > 0
+          contract_active <- !is.null(applied_mp$mp_contract) && applied_mp$mp_contract != "Tous"
+          remote_active   <- isTRUE(applied_mp$mp_remote)
+          salary_active   <- isTRUE(applied_mp$mp_salary_only)
+          hard_active     <- length(applied_mp$mp_hard_skills) > 0
+          adv_active      <- length(applied_mp$mp_advantages) > 0
         
-        mp <- if ("mp_match" %in% names(job)) as.numeric(job$mp_match) else NA_real_
-        badge_txt <- if (is.finite(mp)) paste0(round(mp), "% Match") else "Match —"
-        badge_cls <- match_badge_class(mp)
+          mp <- if ("mp_match" %in% names(job)) as.numeric(job$mp_match) else NA_real_
+          badge_txt <- if (is.finite(mp)) paste0(round(mp), "% Match") else "Match —"
+          badge_cls <- match_badge_class(mp)
         
-        div(
-          class = "offer-card js-offer-card",
-          onclick = sprintf(
-            "Shiny.setInputValue('open_offer', %d, {priority:'event'})",
-            as.numeric(job$id)
-          ),
-          div(class="offer-head",
-              div(class="offer-left",
-                  tags$h3(class="offer-title", title),
-                  div(class="offer-sub",
-                      tags$p(class="offer-company", comp),
-                      tags$p(class="offer-location", loc_txt)
-                  ),
-                  
-                  div(class="pills",
-                      if (nzchar(ct)) {
-                        is_ct_selected <- contract_active &&
-                          tolower(trimws(ct)) == tolower(trimws(applied_mp$mp_contract))
-                        span(class = pill_cls(is_ct_selected), ct)
-                      },
-                      if (has_col(job,"Is_Remote") && is_remote_true(job$Is_Remote)) {
-                        span(class = pill_cls(remote_active), "Télétravail possible")
-                      },
-                      if (nzchar(pay_txt)) {
-                        span(class = pill_cls(salary_active), pay_txt)
-                      }
-                  ),
-                  
-                  if (length(hs) > 0) div(class="offer-line",
-                                          span(class="offer-label", "Stack :"),
-                                          div(class="pills",
-                                              lapply(hs, function(x){
-                                                span(class = pill_cls(hard_active && token_in_selected(x, applied_mp$mp_hard_skills)), x)
-                                              })
-                                          )
-                  ),
-                  
-                  if (length(adv) > 0) div(class="offer-line",
-                                           span(class="offer-label", "Le(s) + :"),
-                                           div(class="pills",
-                                               lapply(adv, function(x){
-                                                 span(class = pill_cls(adv_active && token_in_selected(x, applied_mp$mp_advantages)), x)
-                                               })
-                                           )
-                  )
-              ),
-              div(class="offer-right",
-                  tags$button(
-                    class = paste("fav-btn", if (is_fav) "is-on" else ""),
-                    onclick = sprintf(
-                      "event.stopPropagation(); Shiny.setInputValue('toggle_fav', %d, {priority:'event'})",
-                      as.numeric(job$id)
+          div(
+            class = "offer-card js-offer-card",
+            onclick = sprintf(
+              "Shiny.setInputValue('open_offer', %d, {priority:'event'})",
+              as.numeric(job$id)
+            ),
+            div(class="offer-head",
+                div(class="offer-left",
+                    tags$h3(class="offer-title", title),
+                    div(class="offer-sub",
+                        tags$p(class="offer-company", comp),
+                        tags$p(class="offer-location", loc_txt)
                     ),
-                    tags$i(class = if (is_fav) "fas fa-heart" else "far fa-heart")
-                  ),
-                  
-                  div(class=paste("match-badge", badge_cls), badge_txt),
-                  if (nzchar(ago)) div(class="offer-time", ago),
-                  div(class = "offer-sources-bottom",
-                      render_source_logos(sources)
-                  )
-              )
+                    
+                    div(class="pills",
+                        if (nzchar(ct)) {
+                          is_ct_selected <- contract_active &&
+                            tolower(trimws(ct)) == tolower(trimws(applied_mp$mp_contract))
+                          span(class = pill_cls(is_ct_selected), ct)
+                        },
+                        if (has_col(job,"Is_Remote") && is_remote_true(job$Is_Remote)) {
+                          span(class = pill_cls(remote_active), "Télétravail possible")
+                        },
+                        if (nzchar(pay_txt)) {
+                          span(class = pill_cls(salary_active), pay_txt)
+                        }
+                    ),
+                    
+                    if (length(hs) > 0) div(class="offer-line",
+                                            span(class="offer-label", "Stack :"),
+                                            div(class="pills",
+                                                lapply(hs, function(x){
+                                                  span(class = pill_cls(hard_active && token_in_selected(x, applied_mp$mp_hard_skills)), x)
+                                                })
+                                            )
+                    ),
+                    
+                    if (length(adv) > 0) div(class="offer-line",
+                                             span(class="offer-label", "Le(s) + :"),
+                                             div(class="pills",
+                                                 lapply(adv, function(x){
+                                                   span(class = pill_cls(adv_active && token_in_selected(x, applied_mp$mp_advantages)), x)
+                                                 })
+                                             )
+                    )
+                ),
+                div(class="offer-right",
+                    tags$button(
+                      class = paste("fav-btn", if (is_fav) "is-on" else ""),
+                      onclick = sprintf(
+                        "event.stopPropagation(); Shiny.setInputValue('toggle_fav', %d, {priority:'event'})",
+                        as.numeric(job$id)
+                      ),
+                      tags$i(class = if (is_fav) "fas fa-heart" else "far fa-heart")
+                    ),
+                    
+                    div(class=paste("match-badge", badge_cls), badge_txt),
+                    if (nzchar(ago)) div(class="offer-time", ago),
+                    div(class = "offer-sources-bottom",
+                        render_source_logos(sources)
+                    )
+                )
+            )
           )
-        )
-      })
-    )
+        })
+      )
+    }, error = function(e){
+      div(
+        class = "fav-empty",
+        tags$strong("Erreur pendant le chargement des recommandations :"),
+        tags$pre(style = "white-space: pre-wrap; text-align:left; max-width: 100%;", conditionMessage(e))
+      )
+    })
   })
 
   # Carte recommandations ------------------------------------------------------
@@ -2390,54 +2424,64 @@ server <- function(input, output, session) {
   })
   
   output$mp_map <- leaflet::renderLeaflet({
-    req(rv$mp_run_ok > 0)
-    d <- mp_map_data()
-    
-    m <- leaflet::leaflet() %>%
-      leaflet::addProviderTiles(leaflet::providers$OpenStreetMap) %>%
-      leaflet::setView(lng = 2.2137, lat = 46.2276, zoom = 5)
-    
-    n <- if (is.null(d)) 0 else nrow(d)
-    m <- m %>% leaflet::addControl(
-      html = paste0("<div class='map-count'>", n, " offre", ifelse(n > 1, "s", ""), "</div>"),
-      position = "topright"
-    )
-    
-    if (!is.null(d) && n > 0) {
-      title <- if (has_col(d, "Job_Title")) as.character(d$Job_Title) else ""
-      comp  <- if (has_col(d, "Company"))   as.character(d$Company)   else ""
-      loc   <- if (has_col(d, "Location"))  as.character(d$Location)  else ""
+    tryCatch({
+      req(rv$mp_run_ok > 0)
+      d <- mp_map_data()
       
-      popup <- mapply(function(id, t, c, l){
-        t <- ifelse(is.na(t), "", t)
-        c <- ifelse(is.na(c), "", c)
-        l <- ifelse(is.na(l), "", l)
-        paste0(
-          "<div class='map-popup' onclick=\"Shiny.setInputValue('open_offer', ", id, ", {priority:'event'})\">",
-          "<b>", htmltools::htmlEscape(t), "</b><br>",
-          htmltools::htmlEscape(c), "<br>",
-          htmltools::htmlEscape(l),
-          "</div>"
-        )
-      }, d$id, title, comp, loc, SIMPLIFY = TRUE, USE.NAMES = FALSE)
+      m <- leaflet::leaflet() %>%
+        leaflet::addProviderTiles(leaflet::providers$OpenStreetMap) %>%
+        leaflet::setView(lng = 2.2137, lat = 46.2276, zoom = 5)
       
-      label_vec <- if (has_col(d, "Job_Title")) as.character(d$Job_Title) else NULL
-      
-      m <- m %>% leaflet::addCircleMarkers(
-        data = d,
-        lng = ~Longitude, lat = ~Latitude,
-        radius = 6,
-        stroke = TRUE, weight = 1,
-        fillOpacity = 0.8,
-        popup = popup,
-        label = label_vec,
-        group = "jobs_pts",
-        clusterOptions = CLUSTER_OPTS,
-        popupOptions = leaflet::popupOptions(className = "job-popup")
+      n <- if (is.null(d)) 0 else nrow(d)
+      m <- m %>% leaflet::addControl(
+        html = paste0("<div class='map-count'>", n, " offre", ifelse(n > 1, "s", ""), "</div>"),
+        position = "topright"
       )
-    }
-    
-    m
+      
+      if (!is.null(d) && n > 0) {
+        title <- if (has_col(d, "Job_Title")) as.character(d$Job_Title) else ""
+        comp  <- if (has_col(d, "Company"))   as.character(d$Company)   else ""
+        loc   <- if (has_col(d, "Location"))  as.character(d$Location)  else ""
+        
+        popup <- mapply(function(id, t, c, l){
+          t <- ifelse(is.na(t), "", t)
+          c <- ifelse(is.na(c), "", c)
+          l <- ifelse(is.na(l), "", l)
+          paste0(
+            "<div class='map-popup' onclick=\"Shiny.setInputValue('open_offer', ", id, ", {priority:'event'})\">",
+            "<b>", htmltools::htmlEscape(t), "</b><br>",
+            htmltools::htmlEscape(c), "<br>",
+            htmltools::htmlEscape(l),
+            "</div>"
+          )
+        }, d$id, title, comp, loc, SIMPLIFY = TRUE, USE.NAMES = FALSE)
+        
+        label_vec <- if (has_col(d, "Job_Title")) as.character(d$Job_Title) else NULL
+        
+        m <- m %>% leaflet::addCircleMarkers(
+          data = d,
+          lng = ~Longitude, lat = ~Latitude,
+          radius = 6,
+          stroke = TRUE, weight = 1,
+          fillOpacity = 0.8,
+          popup = popup,
+          label = label_vec,
+          group = "jobs_pts",
+          clusterOptions = CLUSTER_OPTS,
+          popupOptions = leaflet::popupOptions(className = "job-popup")
+        )
+      }
+      
+      m
+    }, error = function(e){
+      leaflet::leaflet() %>%
+        leaflet::addProviderTiles(leaflet::providers$OpenStreetMap) %>%
+        leaflet::setView(lng = 2.2137, lat = 46.2276, zoom = 5) %>%
+        leaflet::addControl(
+          html = paste0("<div class='map-count'>Erreur carte : ", htmltools::htmlEscape(conditionMessage(e)), "</div>"),
+          position = "topright"
+        )
+    })
   })
   
   ## Graphique -----------------------------------------------------------------
