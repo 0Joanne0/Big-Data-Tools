@@ -54,107 +54,6 @@ has_col <- function(df, col) col %in% names(df)
 
 `%||%` <- function(a, b) if (!is.null(a)) a else b
 
-# ----------------------------
-# Normalisation des tags (skills/benefits)
-# Objectif: dédupliquer les variantes ("python programming", "programmation python", etc.)
-# ----------------------------
-norm_ascii_lower <- function(x){
-  x <- as.character(x %||% "")
-  x <- tolower(x)
-  # enlève accents (UTF-8 -> ASCII)
-  x <- iconv(x, from = "UTF-8", to = "ASCII//TRANSLIT")
-  x
-}
-
-clean_tag_txt <- function(x){
-  s <- norm_ascii_lower(x)
-  # unifie séparateurs
-  s <- gsub("[_\\-/]+", " ", s)
-  # garde lettres/chiffres +/# (pour c++ / c#)
-  s <- gsub("[^a-z0-9+# ]+", " ", s)
-  s <- gsub("\\s+", " ", trimws(s))
-  s
-}
-
-# Canonicalise un hard-skill vers un "coeur" quand possible
-canon_hard_skill <- function(x){
-  raw <- trimws(as.character(x %||% ""))
-  if (!nzchar(raw) || is_missing_txt(raw)) return("")
-  
-  s <- clean_tag_txt(raw)
-  if (!nzchar(s) || is_missing_txt(s)) return("")
-  
-  # Langages / fondamentaux
-  if (grepl("\\bpython\\b", s)) return("python")
-  # R: éviter les faux positifs (lettre dans un mot)
-  if (s == "r" || grepl("(^| )r( |$)", s)) return("r")
-  
-  # NoSQL avant SQL (sinon "nosql" match "sql")
-  if (grepl("\\bnosql\\b", s)) return("nosql")
-  if (grepl("\\bsql\\b", s)) return("sql")
-  
-  if (grepl("\\bscala\\b", s)) return("scala")
-  if (grepl("\\bjava\\b", s)) return("java")
-  if (grepl("\\bjavascript\\b", s)) return("javascript")
-  if (grepl("\\bpowershell\\b", s)) return("powershell")
-  if (grepl("\\bbash\\b", s) || grepl("\\bshell\\b", s)) return("bash")
-  if (grepl("c\\+\\+", s) || s == "c++") return("c++")
-  if (grepl("\\bc#\\b", s) || s == "c#") return("c#")
-  
-  # IA/ML (FR/EN)
-  if (grepl("\\bmachine learning\\b", s) || grepl("apprentissage automatique", s)) return("machine_learning")
-  if (grepl("\\bdeep learning\\b", s) || grepl("apprentissage profond", s)) return("deep_learning")
-  if (grepl("\\bnatural language processing\\b", s) || grepl("\\bnlp\\b", s) ||
-      grepl("traitement automatique du langage", s)) return("nlp")
-  if (grepl("\\bcomputer vision\\b", s) || grepl("vision par ordinateur", s)) return("computer_vision")
-  
-  # Divers: garder la valeur d'origine (mais nettoyée) si pas de règle
-  # (on ne force pas underscore/renommage global pour ne pas casser la base existante)
-  raw
-}
-
-canon_soft_skill <- function(x){
-  raw <- trimws(as.character(x %||% ""))
-  if (!nzchar(raw) || is_missing_txt(raw)) return("")
-  s <- clean_tag_txt(raw)
-  if (!nzchar(s) || is_missing_txt(s)) return("")
-  
-  # retire suffixes génériques
-  s <- gsub("\\b(soft skills?|skills?|competences?)\\b", "", s)
-  s <- gsub("\\s+", " ", trimws(s))
-  if (!nzchar(s)) return("")
-  
-  # si un mot "coeur" est présent, on le garde (sinon on renvoie brut)
-  raw
-}
-
-canon_benefit <- function(x){
-  raw <- trimws(as.character(x %||% ""))
-  if (!nzchar(raw) || is_missing_txt(raw)) return("")
-  s <- clean_tag_txt(raw)
-  if (!nzchar(s) || is_missing_txt(s)) return("")
-  raw
-}
-
-canon_tags <- function(x, kind = c("hard","soft","benefit")){
-  kind <- match.arg(kind)
-  x <- x[!is.na(x)]
-  x <- trimws(as.character(x))
-  x <- x[nzchar(x)]
-  if (!length(x)) return(character(0))
-  
-  out <- switch(
-    kind,
-    hard = vapply(x, canon_hard_skill, character(1)),
-    soft = vapply(x, canon_soft_skill, character(1)),
-    benefit = vapply(x, canon_benefit, character(1))
-  )
-  out <- out[!is.na(out)]
-  out <- trimws(as.character(out))
-  out <- out[nzchar(out) & !is_missing_txt(out)]
-  sort(unique(out))
-}
-
 # Badge CSS selon pourcentage de match
 match_badge_class <- function(p){
   if (!is.finite(p)) return("is-gray")
@@ -620,11 +519,11 @@ server <- function(input, output, session) {
         pay <- format_pay(job)
         pay_txt <- if (nzchar(pay$txt)) paste0(pay$txt, " € / ", pay$unit) else ""
         
-        hs <- canon_tags(split_tokens(pick_col(job, c("Hard_Skills"))), kind = "hard")
+        hs <- unique(split_tokens(pick_col(job, c("Hard_Skills"))))
         hs <- head(hs, 3)
         
         adv_col <- c("Benefits","Advantages","Perks")[c("Benefits","Advantages","Perks") %in% names(jobs_df)][1]
-        adv <- if (!is.na(adv_col)) canon_tags(split_tokens(pick_col(job, adv_col)), kind = "benefit") else character(0)
+        adv <- if (!is.na(adv_col)) unique(split_tokens(pick_col(job, adv_col))) else character(0)
         adv <- head(adv, 3)
         
         is_fav <- as.numeric(job$id) %in% rv$favorites
@@ -774,7 +673,8 @@ server <- function(input, output, session) {
     
     # Hard skills (MODIF : retire "non spécifié")
     if (has_col(jobs_df, "Hard_Skills")) {
-      hs <- canon_tags(split_tokens(jobs_df$Hard_Skills), kind = "hard")
+      hs <- split_tokens(jobs_df$Hard_Skills)
+      hs <- hs[!is_missing_txt(hs)]
       updateSelectizeInput(session, "exp_hard_skills",
                            choices = sort(unique(hs)),
                            server = TRUE)
@@ -782,7 +682,8 @@ server <- function(input, output, session) {
     
     # Soft skills (AJOUT)
     if (has_col(jobs_df, "Soft_Skills")) {
-      ss <- canon_tags(split_tokens(jobs_df$Soft_Skills), kind = "soft")
+      ss <- split_tokens(jobs_df$Soft_Skills)
+      ss <- ss[!is_missing_txt(ss)]
       updateSelectizeInput(session, "exp_soft_skills",
                            choices = sort(unique(ss)),
                            server = TRUE)
@@ -791,7 +692,8 @@ server <- function(input, output, session) {
     # Avantages (MODIF : retire "non spécifié")
     adv_col <- c("Benefits", "Advantages", "Perks")[c("Benefits","Advantages","Perks") %in% names(jobs_df)][1]
     if (!is.na(adv_col)) {
-      adv <- canon_tags(split_tokens(jobs_df[[adv_col]]), kind = "benefit")
+      adv <- split_tokens(jobs_df[[adv_col]])
+      adv <- adv[!is_missing_txt(adv)]
       updateSelectizeInput(
         session, "exp_advantages",
         choices = sort(unique(adv)),
@@ -1458,11 +1360,11 @@ server <- function(input, output, session) {
         pay <- format_pay(job)
         pay_txt <- if (nzchar(pay$txt)) paste0(pay$txt, " € / ", pay$unit) else ""
         
-        hs <- canon_tags(split_tokens(pick_col(job, c("Hard_Skills"))), kind = "hard")
+        hs <- unique(split_tokens(pick_col(job, c("Hard_Skills"))))
         hs <- head(hs, 3)
         
         adv_col <- c("Benefits","Advantages","Perks")[c("Benefits","Advantages","Perks") %in% names(jobs_df)][1]
-        adv <- if (!is.na(adv_col)) canon_tags(split_tokens(pick_col(job, adv_col)), kind = "benefit") else character(0)
+        adv <- if (!is.na(adv_col)) unique(split_tokens(pick_col(job, adv_col))) else character(0)
         adv <- head(adv, 3)
         
         is_fav <- as.numeric(job$id) %in% rv$favorites
@@ -1615,14 +1517,14 @@ server <- function(input, output, session) {
     desc_short_html <- HTML(esc_inline(dd$short))
     desc_full_html  <- HTML(esc_inline(dd$full))
     
-    hs <- canon_tags(split_tokens(pick_col(job, c("Hard_Skills"))), kind = "hard")
+    hs <- unique(split_tokens(pick_col(job, c("Hard_Skills"))))
     hs <- hs[!is.na(hs) & nzchar(hs)]
     
-    ss <- canon_tags(split_tokens(pick_col(job, c("Soft_Skills"))), kind = "soft")
+    ss <- unique(split_tokens(pick_col(job, c("Soft_Skills"))))
     ss <- ss[!is.na(ss) & nzchar(ss)]
     
     adv_col <- c("Benefits","Advantages","Perks")[c("Benefits","Advantages","Perks") %in% names(jobs_df)][1]
-    adv <- if (!is.na(adv_col)) canon_tags(split_tokens(pick_col(job, adv_col)), kind = "benefit") else character(0)
+    adv <- if (!is.na(adv_col)) unique(split_tokens(pick_col(job, adv_col))) else character(0)
     adv <- adv[!is.na(adv) & nzchar(adv)]
     
     showModal(modalDialog(
@@ -1758,7 +1660,8 @@ server <- function(input, output, session) {
     
     # Hard skills (MODIF : retire "non spécifié")
     if (has_col(jobs_df, "Hard_Skills")) {
-      hs <- canon_tags(split_tokens(jobs_df$Hard_Skills), kind = "hard")
+      hs <- split_tokens(jobs_df$Hard_Skills)
+      hs <- hs[!is_missing_txt(hs)]
       updateSelectizeInput(
         session, "mp_hard_skills",
         choices = sort(unique(hs)),
@@ -1768,7 +1671,8 @@ server <- function(input, output, session) {
     
     # Soft skills (AJOUT)
     if (has_col(jobs_df, "Soft_Skills")) {
-      ss <- canon_tags(split_tokens(jobs_df$Soft_Skills), kind = "soft")
+      ss <- split_tokens(jobs_df$Soft_Skills)
+      ss <- ss[!is_missing_txt(ss)]
       updateSelectizeInput(
         session, "mp_soft_skills",
         choices = sort(unique(ss)),
@@ -1779,7 +1683,8 @@ server <- function(input, output, session) {
     # Avantages (MODIF : retire "non spécifié")
     adv_col <- c("Benefits", "Advantages", "Perks")[c("Benefits","Advantages","Perks") %in% names(jobs_df)][1]
     if (!is.na(adv_col)) {
-      adv <- canon_tags(split_tokens(jobs_df[[adv_col]]), kind = "benefit")
+      adv <- split_tokens(jobs_df[[adv_col]])
+      adv <- adv[!is_missing_txt(adv)]
       updateSelectizeInput(
         session, "mp_advantages",
         choices = sort(unique(adv)),
@@ -1936,12 +1841,9 @@ server <- function(input, output, session) {
     vocab <- unique(skills_vocab)
     vocab <- vocab[!is.na(vocab) & nzchar(vocab)]
     
-    hit <- vocab[vapply(vocab, function(s){
+    vocab[vapply(vocab, function(s){
       str_detect(txt, fixed(tolower(s)))
     }, logical(1))]
-    
-    # Normalise/déduplique (ex: "python programming" -> "python")
-    canon_tags(hit, kind = "hard")
   }
   
   has_mp_cv <- reactive({
@@ -2233,16 +2135,14 @@ server <- function(input, output, session) {
   mp_user_skills <- reactive({
     sk <- unique(c(applied_mp$mp_hard_skills, rv$mp_cv_terms))
     sk <- sk[!is.na(sk) & nzchar(sk)]
-    # canon + normalise
-    tolower(trimws(canon_tags(sk, kind = "hard")))
+    tolower(trimws(as.character(sk)))
   })
 
   # Calcul du score de match par offre (0..100)
   mp_match_percent_one <- function(job_row, user_skills_norm){
     if (is.null(user_skills_norm) || length(user_skills_norm) == 0) return(NA_real_)
     if (!("Hard_Skills" %in% names(job_row))) return(NA_real_)
-    js <- canon_tags(split_tokens(pick_col(job_row, "Hard_Skills")), kind = "hard")
-    js <- tolower(trimws(js))
+    js <- unique(tolower(trimws(split_tokens(pick_col(job_row, "Hard_Skills")))))
     js <- js[!is.na(js) & nzchar(js)]
     if (length(js) == 0) return(NA_real_)
     hit <- length(intersect(js, user_skills_norm))
@@ -2446,11 +2346,11 @@ server <- function(input, output, session) {
           pay <- format_pay(job)
           pay_txt <- if (nzchar(pay$txt)) paste0(pay$txt, " € / ", pay$unit) else ""
         
-          hs <- canon_tags(split_tokens(pick_col(job, c("Hard_Skills"))), kind = "hard")
+          hs <- unique(split_tokens(pick_col(job, c("Hard_Skills"))))
           hs <- head(hs, 3)
         
           adv_col <- c("Benefits","Advantages","Perks")[c("Benefits","Advantages","Perks") %in% names(jobs_df)][1]
-          adv <- if (!is.na(adv_col)) canon_tags(split_tokens(pick_col(job, adv_col)), kind = "benefit") else character(0)
+          adv <- if (!is.na(adv_col)) unique(split_tokens(pick_col(job, adv_col))) else character(0)
           adv <- head(adv, 3)
         
           is_fav <- as.numeric(job$id) %in% rv$favorites
@@ -3061,11 +2961,11 @@ server <- function(input, output, session) {
         pay <- format_pay(job)
         pay_txt <- if (nzchar(pay$txt)) paste0(pay$txt, " € / ", pay$unit) else ""
         
-        hs <- canon_tags(split_tokens(pick_col(job, c("Hard_Skills"))), kind = "hard")
+        hs <- unique(split_tokens(pick_col(job, c("Hard_Skills"))))
         hs <- head(hs, 3)
         
         adv_col <- c("Benefits","Advantages","Perks")[c("Benefits","Advantages","Perks") %in% names(jobs_df)][1]
-        adv <- if (!is.na(adv_col)) canon_tags(split_tokens(pick_col(job, adv_col)), kind = "benefit") else character(0)
+        adv <- if (!is.na(adv_col)) unique(split_tokens(pick_col(job, adv_col))) else character(0)
         adv <- head(adv, 3)
         
         mp <- get_match_percent(job)
@@ -3191,7 +3091,7 @@ server <- function(input, output, session) {
   }
   
   format_stack_key <- function(job_row){
-    hs <- canon_tags(split_tokens(pick_col(job_row, "Hard_Skills")), kind = "hard")
+    hs <- unique(split_tokens(pick_col(job_row, "Hard_Skills")))
     if (length(hs) == 0) return("—")
     paste(head(hs, 3), collapse = ", ")
   }
