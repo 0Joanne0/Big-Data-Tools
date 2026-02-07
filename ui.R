@@ -773,10 +773,6 @@ navbarPage(
                                         )
                                     )
                                 ),
-                                conditionalPanel(condition = "input.mp_view === 'list'",
-                                                 uiOutput("mp_results_list"),
-                                                 uiOutput("mp_pager")
-                                ),
                                 conditionalPanel(
                                   condition = "input.mp_view === 'map'",
                                   div(class = "map-wrapper",
@@ -786,13 +782,11 @@ navbarPage(
                                   tags$p(
                                     class = "map-note",
                                     "Note : les offres en 100% télétravail ne sont pas affichées sur la carte car elles n’ont pas de localisation."
-                                  ),
-                                  
-                                  div(style = "margin-top: 16px;",
-                                      uiOutput("mp_results_list"),
-                                      uiOutput("mp_pager") 
                                   )
-                                )
+                                ),
+                                
+                                uiOutput("mp_results_list"),
+                                uiOutput("mp_pager")
                                 
                             )
                      )
