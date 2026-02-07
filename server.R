@@ -2325,8 +2325,8 @@ server <- function(input, output, session) {
       d <- mp_sorted_jobs()
       if (is.null(d) || nrow(d) == 0) return(h4("Aucune recommandation avec ces critères."))
       
-      # Recommandations : TOP 3 uniquement
-      dd <- head(d, 3)
+      # Recommandations : TOP 3 uniquement (ultra-explicite)
+      dd <- d[seq_len(min(3L, nrow(d)))]
       
       tagList(
         lapply(seq_len(nrow(dd)), function(i){
@@ -2447,7 +2447,7 @@ server <- function(input, output, session) {
     if (!has_col(d, "Latitude") || !has_col(d, "Longitude")) return(d[0])
     
     # Recommandations : TOP 3 uniquement (carte incluse)
-    d <- head(d, 3)
+    d <- d[seq_len(min(3L, nrow(d)))]
     
     # Copie + imputation des coords manquantes via CP (si possible)
     d <- data.table::copy(d)
