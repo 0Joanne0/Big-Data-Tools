@@ -2229,7 +2229,8 @@ server <- function(input, output, session) {
   mp_total_pages <- reactive({
     d <- mp_sorted_jobs()
     if (is.null(d) || nrow(d) == 0) return(1L)
-    as.integer(ceiling(nrow(d) / PER_PAGE))
+    # Recommandations : on n’affiche que le TOP 3
+    as.integer(ceiling(min(3L, nrow(d)) / PER_PAGE))
   })
   
   observeEvent(list(rv$mp_run_ok, input$mp_apply_filters, input$mp_sort), {
@@ -2268,6 +2269,9 @@ server <- function(input, output, session) {
     d <- mp_sorted_jobs()
     if (is.null(d) || nrow(d) == 0) return(NULL)
     
+    # Recommandations : TOP 3 uniquement => pas de pagination
+    if (nrow(d) <= 3) return(NULL)
+    
     total <- mp_total_pages()
     cur <- rv$mp_page
     if (total <= 1) return(NULL)
@@ -2304,7 +2308,8 @@ server <- function(input, output, session) {
       if (!(rv$mp_run_ok > 0)) return("Lancez l’analyse pour voir les recommandations")
       d <- mp_sorted_jobs()
       n <- if (is.null(d)) 0 else nrow(d)
-      paste(n, "offres recommandées")
+      top_n <- min(3L, n)
+      paste0(top_n, " meilleure", ifelse(top_n > 1, "s", ""), " offre", ifelse(top_n > 1, "s", ""), " recommandée", ifelse(top_n > 1, "s", ""))
     }, error = function(e){
       paste0("Erreur recommandations : ", conditionMessage(e))
     })
@@ -2320,9 +2325,8 @@ server <- function(input, output, session) {
       d <- mp_sorted_jobs()
       if (is.null(d) || nrow(d) == 0) return(h4("Aucune recommandation avec ces critères."))
       
-      start <- (rv$mp_page - 1) * PER_PAGE + 1
-      end   <- min(start + PER_PAGE - 1, nrow(d))
-      dd <- d[start:end]
+      # Recommandations : TOP 3 uniquement
+      dd <- head(d, 3)
       
       tagList(
         lapply(seq_len(nrow(dd)), function(i){
@@ -2441,6 +2445,9 @@ server <- function(input, output, session) {
     d <- mp_sorted_jobs()
     if (is.null(d) || nrow(d) == 0) return(d)
     if (!has_col(d, "Latitude") || !has_col(d, "Longitude")) return(d[0])
+    
+    # Recommandations : TOP 3 uniquement (carte incluse)
+    d <- head(d, 3)
     
     # Copie + imputation des coords manquantes via CP (si possible)
     d <- data.table::copy(d)
