@@ -21,7 +21,8 @@ library(readxl)
 library(leaflet) 
 
 # Chargement des données
-jobs_df <-  data.table::fread("www/data_jobs.csv")
+jobs_path <- if (file.exists("www/data_jobs.csv")) "www/data_jobs.csv" else "data_jobs.csv"
+jobs_df <-  data.table::fread(jobs_path)
 
 col_hard <- "Hard_Skills"
 col_soft <- "Soft_Skills"
@@ -763,6 +764,7 @@ navbarPage(
                                             selectInput("mp_sort",
                                                         label = NULL,
                                                         choices = c("Trier" = "relevance",
+                                                                    "Match : meilleur d'abord" = "match",
                                                                     "Date : ordre décroissant" = "date_desc",
                                                                     "Date : ordre croissant" = "date_asc",
                                                                     "Salaire : ordre décroissant" = "salary_desc",
@@ -772,7 +774,8 @@ navbarPage(
                                     )
                                 ),
                                 conditionalPanel(condition = "input.mp_view === 'list'",
-                                                 uiOutput("mp_results_list")
+                                                 uiOutput("mp_results_list"),
+                                                 uiOutput("mp_pager")
                                 ),
                                 conditionalPanel(
                                   condition = "input.mp_view === 'map'",
@@ -787,7 +790,7 @@ navbarPage(
                                   
                                   div(style = "margin-top: 16px;",
                                       uiOutput("mp_results_list"),
-                                      uiOutput("exp_pager") 
+                                      uiOutput("mp_pager") 
                                   )
                                 )
                                 
