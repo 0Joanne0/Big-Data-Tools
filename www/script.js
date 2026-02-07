@@ -276,14 +276,25 @@ function mpUpdateUploaderUI(){
     uploader.classList.remove("is-uploading", "is-uploaded");
     const t = uploader.querySelector(".mp-upload-status-text");
     if (t) t.textContent = "Téléversement terminé";
+    // reset timestamp
+    delete uploader.dataset.mpSelectedAt;
     return;
   }
 
+  // timestamp au moment de la sélection (utile si la barre de progrès n'apparaît pas)
+  if (!uploader.dataset.mpSelectedAt) uploader.dataset.mpSelectedAt = String(Date.now());
+
   const info = mpGetProgressInfo();
   const txt = (info.text || "").toLowerCase();
+  const selectedAt = parseInt(uploader.dataset.mpSelectedAt || "0", 10) || 0;
+  const ageMs = Date.now() - selectedAt;
+
+  // Détecte fin d'upload:
+  // - soit la progress-bar dit "upload complete"/100%
+  // - soit elle n'existe pas, mais un petit délai est passé après sélection (upload très rapide)
   const uploaded =
     (info.exists && (txt.includes("upload complete") || txt.includes("téléchargement terminé") || txt.includes("telechargement termine") || info.pct >= 100)) ||
-    false;
+    (!info.exists && ageMs > 900);
 
   uploader.classList.toggle("is-uploaded", uploaded);
   uploader.classList.toggle("is-uploading", !uploaded);
@@ -297,6 +308,14 @@ $(document).on("change", "#mp_cv input[type='file'], #mp_cv[type='file']", funct
   $(".profile-uploader").toggleClass("has-file", has);
   if (has) $(".profile-uploader").removeClass("is-error");
   mpUpdateUploaderUI();
+
+  // Re-check quelques fois juste après (au cas où le DOM Shiny met du temps)
+  const start = Date.now();
+  const tick = () => {
+    mpUpdateUploaderUI();
+    if (Date.now() - start < 4000) setTimeout(tick, 250);
+  };
+  setTimeout(tick, 0);
 });
 
 $(document).on("click", ".profile-uploader .mp-cv-remove", function(e){

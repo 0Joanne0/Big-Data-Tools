@@ -1499,32 +1499,31 @@ img.src-logo[title="Indeed"]{
   line-height: 1;
 }
 
-/* Quand upload en cours/terminé, on cache les textes/bouton pour éviter le chevauchement */
-.profile-uploader.is-uploading .uploader-text,
-.profile-uploader.is-uploading .uploader-sub,
-.profile-uploader.is-uploading .mp-browse-btn{
-  opacity: 0;
-}
-
-.profile-uploader.is-uploaded .uploader-text,
-.profile-uploader.is-uploaded .uploader-sub,
-.profile-uploader.is-uploaded .mp-browse-btn{
+/* Dès qu'un fichier est sélectionné, on cache tout et on n'affiche que le badge */
+.profile-uploader.has-file .uploader-text,
+.profile-uploader.has-file .uploader-sub,
+.profile-uploader.has-file .mp-browse-btn{
   display: none;
 }
 
-.profile-uploader.is-uploading .mp-upload-status,
-.profile-uploader.is-uploaded .mp-upload-status{
+.profile-uploader.has-file .mp-upload-status{
   display: inline-flex;
 }
 
-/* Upload terminé : on masque la barre Shiny et on garde le badge propre */
-.profile-uploader.is-uploaded .mp-cv-input .progress.shiny-file-input-progress{
+/* Masque la barre native Shiny (celle qui affiche "Upload complete") */
+.profile-uploader .mp-cv-input .progress.shiny-file-input-progress{
   display: none !important;
 }
 
-/* Upload en cours : la barre reste visible, mais ne chevauche plus les textes (déjà masqués) */
-.profile-uploader.is-uploading .mp-cv-input .progress.shiny-file-input-progress{
-  display: block !important;
+/* Optionnel : style badge quand upload terminé */
+.profile-uploader.is-uploaded .mp-upload-status{
+  background: rgba(255,255,255,0.96);
+  border-color: rgba(16,185,129,0.35);
+  color: #059669;
+}
+.profile-uploader.is-uploaded .mp-upload-status-icon{
+  background: rgba(16,185,129,0.14);
+  color: #059669;
 }
 
 /* Upload CV : état erreur */
