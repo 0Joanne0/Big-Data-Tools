@@ -253,7 +253,7 @@ source_logo_tag <- function(src){
   }
   if (src == "Indeed") {
     return(tags$img(
-      src   = "icons/indeed-logo.jpg",
+      src   = "icons/indeed-logo.svg",
       class = paste("src-logo", cls_extra),
       title = "Indeed"
     ))

@@ -56,7 +56,7 @@ app_footer <- function() {
               div(class = "footer-top",
                   div(class = "footer-brand",
                       div(class = "footer-brand-row",
-                          img(src = "icons/logo-brand.webp",
+                          img(src = "icons/logo-brand.svg",
                               height = "60px",
                               class = "footer-logo-white"
                           ),
@@ -97,7 +97,7 @@ app_footer <- function() {
 
 ui <- navbarPage(
   title = div(class = "logo-container",
-              img(src = "icons/logo-brand.webp",
+              img(src = "icons/logo-brand.svg",
                   height = "55px", style = "margin-right:15px;"),
               # Bloc texte empilé
               div(class = "title-stack",
@@ -141,7 +141,7 @@ ui <- navbarPage(
                div(class = "road-visual-area",
                    # voiture
                    img(id = "car-icon",
-                       src = "icons/car-icon.webp",
+                       src = "icons/car-icon.svg",
                        class = "car-sprite"
                    ),
                    # Route
@@ -808,7 +808,7 @@ ui <- navbarPage(
                        ),
                        div(class = "fav-hero-right",
                            div(class = "fav-hero-visual",
-                               tags$img(src = "icons/fav-hero-img.webp",
+                              tags$img(src = "icons/fav-hero-img.svg",
                                         class = "fav-hero-img",
                                         alt   = "Illustration favoris")
                            )
