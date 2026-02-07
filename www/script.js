@@ -244,10 +244,59 @@ Shiny.addCustomMessageHandler("setText", function(msg){
 });
 
 // Upload CV : détecte fichier + bouton X pour vider
+function mpGetProgressInfo(){
+  const bar = document.querySelector("#mp_cv .progress.shiny-file-input-progress .progress-bar");
+  if (!bar) return { exists: false, pct: null, text: "" };
+  let pct = null;
+  const aria = bar.getAttribute("aria-valuenow");
+  if (aria != null) {
+    const v = parseFloat(aria);
+    if (!Number.isNaN(v)) pct = v;
+  }
+  if (pct == null && bar.style && typeof bar.style.width === "string") {
+    const m = bar.style.width.match(/([0-9.]+)%/);
+    if (m) {
+      const v = parseFloat(m[1]);
+      if (!Number.isNaN(v)) pct = v;
+    }
+  }
+  const text = (bar.textContent || "").trim();
+  return { exists: true, pct, text };
+}
+
+function mpUpdateUploaderUI(){
+  const uploader = document.querySelector(".profile-uploader");
+  if (!uploader) return;
+
+  const fe = document.querySelector("#mp_cv input[type='file']") || document.querySelector("#mp_cv[type='file']");
+  const has = !!(fe && fe.files && fe.files.length > 0);
+
+  uploader.classList.toggle("has-file", has);
+  if (!has) {
+    uploader.classList.remove("is-uploading", "is-uploaded");
+    const t = uploader.querySelector(".mp-upload-status-text");
+    if (t) t.textContent = "Upload complete";
+    return;
+  }
+
+  const info = mpGetProgressInfo();
+  const txt = (info.text || "").toLowerCase();
+  const uploaded =
+    (info.exists && (txt.includes("upload complete") || txt.includes("téléchargement terminé") || txt.includes("telechargement termine") || info.pct >= 100)) ||
+    false;
+
+  uploader.classList.toggle("is-uploaded", uploaded);
+  uploader.classList.toggle("is-uploading", !uploaded);
+
+  const t = uploader.querySelector(".mp-upload-status-text");
+  if (t) t.textContent = uploaded ? "Upload complete" : "Uploading…";
+}
+
 $(document).on("change", "#mp_cv input[type='file'], #mp_cv[type='file']", function(){
   const has = this.files && this.files.length > 0;
   $(".profile-uploader").toggleClass("has-file", has);
   if (has) $(".profile-uploader").removeClass("is-error");
+  mpUpdateUploaderUI();
 });
 
 $(document).on("click", ".profile-uploader .mp-cv-remove", function(e){
@@ -257,6 +306,23 @@ $(document).on("click", ".profile-uploader .mp-cv-remove", function(e){
   const $f = $("#mp_cv input[type='file'], #mp_cv[type='file']");
   $f.val("");
   $f.trigger("change");
+
+  // Reset état upload
+  $(".profile-uploader").removeClass("is-uploading is-uploaded");
+  mpUpdateUploaderUI();
+});
+
+// Observe les changements de la barre de progression Shiny pour basculer vers "Upload complete"
+$(document).on("shiny:connected", function () {
+  function bind(){
+    const target = document.getElementById("mp_cv");
+    if (!target) return false;
+    const obs = new MutationObserver(() => mpUpdateUploaderUI());
+    obs.observe(target, { childList: true, subtree: true, attributes: true });
+    mpUpdateUploaderUI();
+    return true;
+  }
+  if (!bind()) setTimeout(bind, 0);
 });
 
 

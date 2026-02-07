@@ -521,6 +521,10 @@ ui <- navbarPage(
                                         div(class = "mp-browse-btn", 
                                             "Parcourir"
                                         ),
+                                        div(class = "mp-upload-status",
+                                            tags$span(class = "mp-upload-status-icon", HTML("✓")),
+                                            tags$span(class = "mp-upload-status-text", "Upload complete")
+                                        ),
                                         div(class = "mp-cv-input",
                                             fileInput("mp_cv", 
                                                       label = NULL, 

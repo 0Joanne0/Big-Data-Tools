@@ -1467,6 +1467,66 @@ img.src-logo[title="Indeed"]{
   display: flex;
 }
 
+/* Upload CV : états clean (pas de superposition) -------------------------- */
+.profile-uploader .mp-upload-status{
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.92);
+  border: 1px solid rgba(0,0,0,0.08);
+  box-shadow: 0 10px 24px rgba(0,0,0,0.10);
+  font-family: "Roboto", sans-serif;
+  font-weight: 800;
+  color: #0b66d9;
+  z-index: 25;
+  position: relative;
+  pointer-events: none;
+}
+
+.profile-uploader .mp-upload-status-icon{
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(11,102,217,0.12);
+  color: #0b66d9;
+  font-weight: 900;
+  line-height: 1;
+}
+
+/* Quand upload en cours/terminé, on cache les textes/bouton pour éviter le chevauchement */
+.profile-uploader.is-uploading .uploader-text,
+.profile-uploader.is-uploading .uploader-sub,
+.profile-uploader.is-uploading .mp-browse-btn{
+  opacity: 0;
+}
+
+.profile-uploader.is-uploaded .uploader-text,
+.profile-uploader.is-uploaded .uploader-sub,
+.profile-uploader.is-uploaded .mp-browse-btn{
+  display: none;
+}
+
+.profile-uploader.is-uploading .mp-upload-status,
+.profile-uploader.is-uploaded .mp-upload-status{
+  display: inline-flex;
+}
+
+/* Upload terminé : on masque la barre Shiny et on garde le badge propre */
+.profile-uploader.is-uploaded .mp-cv-input .progress.shiny-file-input-progress{
+  display: none !important;
+}
+
+/* Upload en cours : la barre reste visible, mais ne chevauche plus les textes (déjà masqués) */
+.profile-uploader.is-uploading .mp-cv-input .progress.shiny-file-input-progress{
+  display: block !important;
+}
+
 /* Upload CV : état erreur */
 .profile-uploader.is-error{
   border-color: #e53935 !important;
