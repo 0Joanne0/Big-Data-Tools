@@ -523,7 +523,7 @@ ui <- navbarPage(
                                         ),
                                         div(class = "mp-upload-status",
                                             tags$span(class = "mp-upload-status-icon", HTML("✓")),
-                                            tags$span(class = "mp-upload-status-text", "Upload complete")
+                                            tags$span(class = "mp-upload-status-text", "Téléversement terminé")
                                         ),
                                         div(class = "mp-cv-input",
                                             fileInput("mp_cv", 

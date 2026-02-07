@@ -275,7 +275,7 @@ function mpUpdateUploaderUI(){
   if (!has) {
     uploader.classList.remove("is-uploading", "is-uploaded");
     const t = uploader.querySelector(".mp-upload-status-text");
-    if (t) t.textContent = "Upload complete";
+    if (t) t.textContent = "Téléversement terminé";
     return;
   }
 
@@ -289,7 +289,7 @@ function mpUpdateUploaderUI(){
   uploader.classList.toggle("is-uploading", !uploaded);
 
   const t = uploader.querySelector(".mp-upload-status-text");
-  if (t) t.textContent = uploaded ? "Upload complete" : "Uploading…";
+  if (t) t.textContent = uploaded ? "Téléversement terminé" : "Téléversement…";
 }
 
 $(document).on("change", "#mp_cv input[type='file'], #mp_cv[type='file']", function(){
@@ -312,7 +312,7 @@ $(document).on("click", ".profile-uploader .mp-cv-remove", function(e){
   mpUpdateUploaderUI();
 });
 
-// Observe les changements de la barre de progression Shiny pour basculer vers "Upload complete"
+// Observe les changements de la barre de progression Shiny pour basculer vers "Téléversement terminé"
 $(document).on("shiny:connected", function () {
   function bind(){
     const target = document.getElementById("mp_cv");
