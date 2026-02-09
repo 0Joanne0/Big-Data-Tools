@@ -2885,6 +2885,31 @@ server <- function(input, output, session) {
     
     if (!is.null(sm)) {
       
+      # Match : décroissant (Top recommandations)
+      if (sm == "match") {
+        user_skills_can <- unique(c(applied_mp$mp_hard_skills, canonize_vec(rv$mp_cv_terms)))
+        user_skills_can <- user_skills_can[!is.na(user_skills_can) & nzchar(user_skills_can)]
+        
+        data[, .m := vapply(seq_len(.N), function(i){
+          job <- data[i]
+          
+          # Hard skills canon de l’offre
+          js <- if (has_col(job, "Hard_Skills_Canon")) {
+            split_tokens(job$Hard_Skills_Canon)
+          } else {
+            get_hard_can(job)
+          }
+          js <- canonize_vec(js)
+          js <- unique(js[!is.na(js) & nzchar(js)])
+          
+          if (length(js) == 0 || length(user_skills_can) == 0) return(0)
+          round(100 * sum(js %in% user_skills_can) / length(js))
+        }, numeric(1))]
+        
+        data <- data[order(-.m, .idx)]
+        data[, .m := NULL]
+      }
+      
       # Salaire : décroissant
       if (sm == "salary_desc" && salary_cols_ok(data)) {
         if (!is.null(applied_mp$mp_contract) && tolower(applied_mp$mp_contract) == "freelance") {
@@ -3149,6 +3174,154 @@ server <- function(input, output, session) {
       
       tags$div(style="margin-top:14px;", tags$strong("Axes de Progression :")),
       div(class="pills", lapply(missing, function(x) span(class="pill blue", x)))
+    )
+  })
+  
+  ## Output recommandations (Top 3) --------------------------------------------
+  output$mp_count <- renderText({
+    req(rv$mp_run_ok > 0)
+    d <- mp_sorted_jobs()
+    n <- if (is.null(d)) 0 else nrow(d)
+    n_show <- min(3, n)
+    paste0(n_show, " recommandation", ifelse(n_show > 1, "s", ""))
+  })
+  
+  output$mp_results_list <- renderUI({
+    req(rv$mp_run_ok > 0)
+    
+    d <- mp_sorted_jobs()
+    if (is.null(d) || nrow(d) == 0) return(h4("Aucune recommandation pour le moment."))
+    
+    dd <- head(d, 3)
+    
+    # Skills utilisateur = sélection + CV (canon)
+    user_skills_can <- unique(c(applied_mp$mp_hard_skills, canonize_vec(rv$mp_cv_terms)))
+    user_skills_can <- user_skills_can[!is.na(user_skills_can) & nzchar(user_skills_can)]
+    
+    badge_class <- function(p){
+      if (!is.finite(p)) return("is-gray")
+      if (p >= 70) return("is-green")
+      if (p >= 45) return("is-orange")
+      "is-red"
+    }
+    
+    match_percent_one <- function(job_row){
+      js <- if (has_col(job_row, "Hard_Skills_Canon")) {
+        split_tokens(job_row$Hard_Skills_Canon)
+      } else {
+        get_hard_can(job_row)
+      }
+      js <- canonize_vec(js)
+      js <- unique(js[!is.na(js) & nzchar(js)])
+      if (length(js) == 0 || length(user_skills_can) == 0) return(0)
+      round(100 * sum(js %in% user_skills_can) / length(js))
+    }
+    
+    tagList(
+      lapply(seq_len(nrow(dd)), function(i){
+        job <- dd[i]
+        
+        title <- pick_col(job, c("Job_Title","Title"))
+        comp  <- pick_col(job, c("Company","Company_Name"))
+        loc   <- pick_col(job, c("Location","City","Region"))
+        cp_raw <- pick_col(job, c("Code_Postal","CP","Postal_Code"))
+        cp_fmt <- format_postal_code(cp_raw)
+        loc_txt <- paste0(loc, if (nzchar(cp_fmt)) paste0(" (", cp_fmt, ")") else "")
+        
+        ct    <- pick_col(job, c("Contract_Type","Contract"))
+        ago   <- if (has_col(job, "Publish_Date")) posted_ago_txt(job$Publish_Date) else ""
+        sources <- get_offer_sources(job)
+        
+        pay <- format_pay(job)
+        pay_txt <- if (nzchar(pay$txt)) paste0(pay$txt, " € / ", pay$unit) else ""
+        
+        # Hard skills (rapide) : on affiche 3 et on surligne celles du profil
+        if (has_col(job, "Hard_Skills_Canon") && has_col(job, "Hard_Skills_Label")) {
+          hs_can <- head(split_tokens(job$Hard_Skills_Canon), 3)
+          hs_lbl <- head(split_tokens(job$Hard_Skills_Label), 3)
+        } else {
+          hs_can <- head(get_hard_can(job), 3)
+          hs_lbl <- labelize_vec(hs_can)
+        }
+        
+        # Avantages (rapide)
+        if (has_col(job, "Advantages_Canon") && has_col(job, "Advantages_Label")) {
+          adv_keys <- head(split_tokens(job$Advantages_Canon), 3)
+          adv_lbl  <- head(split_tokens(job$Advantages_Label), 3)
+        } else {
+          adv_keys <- head(get_adv_can(job), 3)
+          adv_lbl  <- labelize_adv_vec(adv_keys)
+        }
+        
+        is_fav <- as.numeric(job$id) %in% rv$favorites
+        
+        mp <- match_percent_one(job)
+        bcls <- badge_class(mp)
+        badge_txt <- paste0(mp, "% Match")
+        
+        div(
+          class = "offer-card js-offer-card",
+          onclick = sprintf(
+            "Shiny.setInputValue('open_offer', %d, {priority:'event'})",
+            as.numeric(job$id)
+          ),
+          div(class="offer-head",
+              div(class="offer-left",
+                  tags$h3(class="offer-title", title),
+                  div(class="offer-sub",
+                      tags$p(class="offer-company", comp),
+                      tags$p(class="offer-location", loc_txt)
+                  ),
+                  
+                  div(class="pills",
+                      if (nzchar(ct)) span(class = pill_cls(FALSE), ct),
+                      if (has_col(job,"Is_Remote") && is_remote_true(job$Is_Remote)) span(class = pill_cls(FALSE), "Télétravail possible"),
+                      if (nzchar(pay_txt)) span(class = pill_cls(FALSE), pay_txt)
+                  ),
+                  
+                  if (length(hs_can) > 0) div(class="offer-line",
+                                              span(class="offer-label", "Stack :"),
+                                              div(class="pills",
+                                                  lapply(seq_along(hs_can), function(j){
+                                                    span(
+                                                      class = pill_cls(hs_can[j] %in% user_skills_can),
+                                                      hs_lbl[j]
+                                                    )
+                                                  })
+                                              )
+                  ),
+                  
+                  if (length(adv_keys) > 0) div(class="offer-line",
+                                                span(class="offer-label", "Le(s) + :"),
+                                                div(class="pills",
+                                                    lapply(seq_along(adv_keys), function(j){
+                                                      span(class = pill_cls(FALSE), adv_lbl[j])
+                                                    })
+                                                )
+                  )
+              ),
+              
+              div(class="offer-right",
+                  tags$button(
+                    class = paste("fav-btn", if (is_fav) "is-on" else ""),
+                    onclick = sprintf(
+                      "event.stopPropagation(); Shiny.setInputValue('toggle_fav', %d, {priority:'event'})",
+                      as.numeric(job$id)
+                    ),
+                    tags$i(class = if (is_fav) "fas fa-heart" else "far fa-heart")
+                  ),
+                  
+                  div(class=paste("match-badge", bcls), badge_txt),
+                  
+                  if (nzchar(ago)) div(class="offer-time", ago),
+                  
+                  div(class = "offer-sources-bottom",
+                      render_source_logos(sources)
+                  )
+              )
+          )
+        )
+      })
     )
   })
   
