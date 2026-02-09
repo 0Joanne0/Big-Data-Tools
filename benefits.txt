@@ -1,0 +1,292 @@
+# Dictionnaire de normalisation "BENEFITS"
+
+# -----------------------------
+# SALAIRE & FINANCIER
+# -----------------------------
+"competitive salary": "salaire compétitif",
+"salaire competitif": "salaire compétitif",
+"salaire compétitif": "salaire compétitif",
+"salaire attractif": "salaire compétitif",
+"attractive salary": "salaire compétitif",
+"attractive salary based on profile": "salaire compétitif",
+
+"salary package": "package de rémunération",
+"compensation package": "package de rémunération",
+"plan de remuneration": "package de rémunération",
+"plan de rémunération": "package de rémunération",
+"remuneration attractive": "package de rémunération",
+"rémunération attractive": "package de rémunération",
+"remuneration competitive": "package de rémunération",
+"rémunération compétitive": "package de rémunération",
+
+"bonus": "bonus",
+"annual bonus": "bonus annuel",
+"bonus annuel": "bonus annuel",
+"prime": "bonus",
+"primes": "bonus",
+"prime annuelle": "bonus annuel",
+"prime de fin d annee": "bonus annuel",
+"prime de fin d'année": "bonus annuel",
+"performance bonus": "bonus de performance",
+"bonus de performance": "bonus de performance",
+"prime de performance": "bonus de performance",
+"prime sur objectifs": "bonus de performance",
+
+"commission": "commission",
+"commissions": "commission",
+"variable compensation": "rémunération variable",
+"remuneration variable": "rémunération variable",
+"rémunération variable": "rémunération variable",
+
+"profit sharing": "intéressement / participation",
+"participation": "intéressement / participation",
+"prime de participation": "intéressement / participation",
+"intéressement": "intéressement / participation",
+"interessement": "intéressement / participation",
+"prime d interessement": "intéressement / participation",
+"prime d'intéressement": "intéressement / participation",
+
+"pe e": "épargne salariale",
+"pee": "épargne salariale",
+"perco": "épargne salariale",
+"plan d epargne entreprise": "épargne salariale",
+"plan d'épargne entreprise": "épargne salariale",
+
+"abondement": "abondement employeur",
+"abondement pee": "abondement employeur",
+"abondement per": "abondement employeur",
+"employer matching": "abondement employeur",
+
+"salary review": "revue salariale",
+"annual salary review": "revue salariale",
+"revue salariale": "revue salariale",
+"revalorisation salariale": "revue salariale",
+"augmentation annuelle": "revue salariale",
+"pay review": "revue salariale",
+
+"13th month": "13e mois",
+"13e mois": "13e mois",
+"treizieme mois": "13e mois",
+"treizième mois": "13e mois",
+
+"14e mois": "14e mois",
+"fourteenth month": "14e mois",
+
+"stock options": "actions / equity",
+"stock-options": "actions / equity",
+"equity": "actions / equity",
+"shares": "actions / equity",
+"actions gratuites": "actions / equity",
+"rsu": "actions / equity",
+"bspce": "actions / equity",
+"plan d actionnariat": "actions / equity",
+"plan d'actionnariat": "actions / equity",
+
+"prime de cooptation": "prime de cooptation",
+"referral bonus": "prime de cooptation",
+
+"prime de bienvenue": "prime de bienvenue",
+"prime de signature": "prime de bienvenue",
+"sign-on bonus": "prime de bienvenue",
+
+"prime d astreinte": "astreinte rémunérée",
+"prime d'astreinte": "astreinte rémunérée",
+"astreinte remuneree": "astreinte rémunérée",
+"astreinte rémunérée": "astreinte rémunérée",
+
+"prime de deplacement": "indemnité de déplacement",
+"prime de déplacement": "indemnité de déplacement",
+
+# -----------------------------
+# QUALITÉ DE VIE / FLEXIBILITÉ / TÉLÉTRAVAIL
+# -----------------------------
+"work life balance": "équilibre vie pro / perso",
+"work-life balance": "équilibre vie pro / perso",
+"worklife balance": "équilibre vie pro / perso",
+"equilibre vie pro vie perso": "équilibre vie pro / perso",
+"équilibre vie pro vie perso": "équilibre vie pro / perso",
+"qvt": "qualité de vie au travail",
+"qualite de vie au travail": "qualité de vie au travail",
+"qualité de vie au travail": "qualité de vie au travail",
+
+"flexible working hours": "horaires flexibles",
+"flexible hours": "horaires flexibles",
+"flexible schedule": "horaires flexibles",
+"horaires flexibles": "horaires flexibles",
+"horaires amenages": "horaires flexibles",
+"horaires aménagés": "horaires flexibles",
+"flexibilite horaire": "horaires flexibles",
+"flexibilité horaire": "horaires flexibles",
+
+"remote work": "télétravail",
+"remote": "télétravail",
+"telework": "télétravail",
+"teletravail": "télétravail",
+"télétravail": "télétravail",
+
+"hybrid work": "travail hybride",
+"travail hybride": "travail hybride",
+"télétravail hybride": "travail hybride",
+"teletravail hybride": "travail hybride",
+
+"full remote": "télétravail à 100%",
+"100 teletravail": "télétravail à 100%",
+"100% teletravail": "télétravail à 100%",
+"100% télétravail": "télétravail à 100%",
+
+"work from home": "télétravail",
+"wfh": "télétravail",
+
+# -----------------------------
+# CONGÉS & TEMPS LIBRE
+# -----------------------------
+"paid leave": "congés payés",
+"paid vacation": "congés payés",
+"vacation days": "congés payés",
+"conges payes": "congés payés",
+"congés payés": "congés payés",
+
+"rtt": "rtt",
+"jours de rtt": "rtt",
+"jours de RTT": "rtt",
+
+"extra holidays": "congés supplémentaires",
+"extra vacation": "congés supplémentaires",
+"conges supplementaires": "congés supplémentaires",
+"congés supplémentaires": "congés supplémentaires",
+
+"days off": "jours de repos",
+"jours de repos": "jours de repos",
+
+"unlimited paid leave": "congés illimités",
+"conges illimites": "congés illimités",
+"congés illimités": "congés illimités",
+
+"flexible time off": "congés flexibles",
+"conges flexibles": "congés flexibles",
+"congés flexibles": "congés flexibles",
+
+# -----------------------------
+# SANTÉ & BIEN-ÊTRE
+# -----------------------------
+"health insurance": "mutuelle",
+"mutuelle": "mutuelle",
+"mutuelle sante": "mutuelle",
+"mutuelle santé": "mutuelle",
+"complementaire sante": "mutuelle",
+"complémentaire santé": "mutuelle",
+
+"prevoyance": "prévoyance",
+"prévoyance": "prévoyance",
+
+"well-being program": "programme bien-être",
+"programme bien-etre": "programme bien-être",
+"programme bien-être": "programme bien-être",
+
+"soutien psychologique": "soutien psychologique",
+"mental health support": "soutien psychologique",
+
+"teleconsultation": "téléconsultation",
+"téléconsultation": "téléconsultation",
+
+"ergonomie": "poste de travail ergonomique",
+"poste ergonomique": "poste de travail ergonomique",
+
+# -----------------------------
+# TRANSPORT & MOBILITÉ
+# -----------------------------
+"transport allowance": "prise en charge des transports",
+"commuting allowance": "prise en charge des transports",
+"prise en charge transport": "prise en charge des transports",
+"remboursement transport": "prise en charge des transports",
+"public transportation coverage": "prise en charge des transports",
+
+"forfait mobilite durable": "forfait mobilité durable",
+"forfait mobilité durable": "forfait mobilité durable",
+"fmd": "forfait mobilité durable",
+
+"parking": "parking",
+"parking gratuit": "parking",
+"place de parking": "parking",
+
+"bike parking": "parking vélo",
+"abri velo": "parking vélo",
+"abri vélo": "parking vélo",
+
+# -----------------------------
+# ÉQUIPEMENT / TÉLÉTRAVAIL
+# -----------------------------
+"laptop": "ordinateur professionnel",
+"company laptop": "ordinateur professionnel",
+"ordinateur portable": "ordinateur professionnel",
+
+"professional equipment": "équipement professionnel",
+"materiel fourni": "équipement professionnel",
+"matériel fourni": "équipement professionnel",
+
+"home office equipment": "équipement de télétravail",
+"setup teletravail": "équipement de télétravail",
+"setup télétravail": "équipement de télétravail",
+
+"professional phone": "téléphone professionnel",
+"telephone professionnel": "téléphone professionnel",
+"téléphone professionnel": "téléphone professionnel",
+
+# -----------------------------
+# FORMATION & CARRIÈRE
+# -----------------------------
+"training": "formation",
+"formations": "formation",
+"formation": "formation",
+"continuous training": "formation continue",
+"formation continue": "formation continue",
+
+"training budget": "budget formation",
+"budget formation": "budget formation",
+
+"career development": "évolution de carrière",
+"professional growth": "évolution de carrière",
+"evolution de carriere": "évolution de carrière",
+"évolution de carrière": "évolution de carrière",
+
+"mentoring": "mentorat",
+"mentorat": "mentorat",
+"coaching": "coaching",
+"accompagnement": "coaching",
+
+# -----------------------------
+# CULTURE & ENVIRONNEMENT
+# -----------------------------
+"friendly environment": "ambiance conviviale",
+"ambiance conviviale": "ambiance conviviale",
+
+"inclusive environment": "environnement inclusif",
+"environnement bienveillant": "environnement inclusif",
+
+"dynamic team": "équipe dynamique",
+"equipe dynamique": "équipe dynamique",
+"équipe dynamique": "équipe dynamique",
+
+"startup environment": "environnement startup",
+"esprit startup": "environnement startup",
+
+"team events": "événements d’équipe",
+"evenements d equipe": "événements d’équipe",
+"événements d'équipe": "événements d’équipe",
+"team building": "événements d’équipe",
+
+# -----------------------------
+# CONTRAT & STABILITÉ
+# -----------------------------
+"permanent contract": "cdi",
+"cdi": "cdi",
+"job stability": "stabilité de l’emploi",
+"long-term position": "stabilité de l’emploi",
+
+# -----------------------------
+# FALLBACKS
+# -----------------------------
+"tickets resto": "tickets restaurant",
+"ticket resto": "tickets restaurant",
+"13eme mois": "13e mois",
+"13ème mois": "13e mois",
