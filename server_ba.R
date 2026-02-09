@@ -2619,19 +2619,97 @@ server <- function(input, output, session) {
   }, ignoreInit = TRUE)
   
   ## Extraction skills depuis PDF ----------------------------------------------
+  extract_text_from_pdf <- function(pdf_path){
+    if (is.null(pdf_path) || !nzchar(pdf_path) || !file.exists(pdf_path)) return("")
+    
+    # 1) pdftools (si dispo)
+    if (requireNamespace("pdftools", quietly = TRUE)) {
+      txt <- tryCatch(
+        paste(pdftools::pdf_text(pdf_path), collapse = " "),
+        error = function(e) ""
+      )
+      if (nzchar(txt)) return(txt)
+    }
+    
+    # 2) fallback CLI: pdftotext (poppler-utils) si dispo
+    bin <- Sys.which("pdftotext")
+    if (nzchar(bin)) {
+      out <- tempfile(fileext = ".txt")
+      # usage: pdftotext <pdf> <txt>
+      tryCatch(
+        suppressWarnings(system2(bin, args = c(pdf_path, out), stdout = TRUE, stderr = TRUE)),
+        error = function(e) NULL
+      )
+      if (file.exists(out)) {
+        txt <- tryCatch(paste(readLines(out, warn = FALSE, encoding = "UTF-8"), collapse = " "),
+                        error = function(e) "")
+        unlink(out)
+        if (nzchar(txt)) return(txt)
+      }
+    }
+    
+    ""
+  }
+  
+  normalize_cv_text <- function(x){
+    x <- as.character(x %||% "")
+    if (!nzchar(x)) return("")
+    x <- tolower(x)
+    x <- gsub("_", " ", x)
+    x <- gsub("-", " ", x)
+    # conserve / + # . (utile: ci/cd, c++, c#, .net) et espaces
+    x <- gsub("[^[:alnum:]/+#. ]", " ", x)
+    x <- gsub("\\s+", " ", x)
+    x <- trimws(x)
+    
+    # enlever accents (robuste)
+    if (requireNamespace("stringi", quietly = TRUE)) {
+      x <- stringi::stri_trans_general(x, "Latin-ASCII")
+      x <- tolower(trimws(x))
+    } else {
+      x <- tolower(trimws(iconv(x, from = "", to = "ASCII//TRANSLIT")))
+    }
+    x
+  }
+  
   extract_skills_from_cv <- function(pdf_path, skills_vocab){
     if (is.null(pdf_path) || !nzchar(pdf_path)) return(character(0))
-    if (!requireNamespace("pdftools", quietly = TRUE)) return(character(0))
     
-    txt <- paste(pdftools::pdf_text(pdf_path), collapse = " ")
-    txt <- tolower(txt)
+    raw_txt <- extract_text_from_pdf(pdf_path)
+    if (!nzchar(raw_txt)) return(character(0))
     
+    txt_norm <- normalize_cv_text(raw_txt)
+    if (!nzchar(txt_norm)) return(character(0))
+    
+    # 1) candidates (vocab) -> normalisés
     vocab <- unique(skills_vocab)
     vocab <- vocab[!is.na(vocab) & nzchar(vocab)]
+    vocab_norm <- unique(normalize_skill(vocab))
+    vocab_norm <- vocab_norm[!is.na(vocab_norm) & nzchar(vocab_norm)]
     
-    vocab[vapply(vocab, function(s){
-      str_detect(txt, fixed(tolower(s)))
-    }, logical(1))]
+    # 2) match exact-ish (avec padding pour éviter les sous-chaînes)
+    txt_pad <- paste0(" ", txt_norm, " ")
+    pat_pad <- paste0(" ", vocab_norm, " ")
+    m_vocab <- vapply(pat_pad, function(p) str_detect(txt_pad, fixed(p)), logical(1))
+    found_vocab <- vocab_norm[m_vocab]
+    
+    # 3) match compact (ex: "powerbi" vs "power bi") sur tokens assez longs
+    txt_compact <- gsub("[^[:alnum:]+#]", "", txt_norm)
+    vocab_compact_all <- gsub("[^[:alnum:]+#]", "", vocab_norm)
+    keep2 <- nchar(vocab_compact_all) >= 4
+    found_compact_norm <- character(0)
+    if (nzchar(txt_compact) && any(keep2)) {
+      vv <- vocab_compact_all[keep2]
+      m2 <- vapply(vv, function(p) str_detect(txt_compact, fixed(p)), logical(1))
+      found_compact_norm <- vocab_norm[keep2][m2]
+    }
+    
+    # 4) retour en canon (clé stable)
+    # - found_vocab: déjà normalisé (avec espaces)
+    # - found_compact_norm: vocab_norm retrouvé via matching compact
+    found_all <- unique(c(found_vocab, found_compact_norm))
+    found_all <- found_all[!is.na(found_all) & nzchar(found_all)]
+    canonize_vec(found_all)
   }
   
   has_mp_cv <- reactive({
@@ -2998,10 +3076,14 @@ server <- function(input, output, session) {
   ### Fréquence des skills demandées sur les offres filtrées ----
   market_skill_freq <- function(df_offers){
     if (is.null(df_offers) || nrow(df_offers) == 0) return(data.table::data.table())
-    if (!("Hard_Skills" %in% names(df_offers))) return(data.table::data.table())
     if (!("id" %in% names(df_offers))) return(data.table::data.table())
     
-    toks <- lapply(df_offers$Hard_Skills, function(x) unique(norm_skill(split_tokens(x))))
+    skill_col <- if ("Hard_Skills_Canon" %in% names(df_offers)) "Hard_Skills_Canon" else if ("Hard_Skills" %in% names(df_offers)) "Hard_Skills" else NA_character_
+    if (is.na(skill_col)) return(data.table::data.table())
+    
+    toks <- lapply(df_offers[[skill_col]], function(x) {
+      unique(canonize_vec(split_tokens(x)))
+    })
     
     long <- data.table::data.table(
       offer_id = rep(df_offers$id, lengths(toks)),
@@ -3015,10 +3097,12 @@ server <- function(input, output, session) {
   ### Calcul note basé sur la couverture de demande ----
   compute_radar_scores <- function(df_offers, user_skills){
     if (is.null(df_offers) || nrow(df_offers) == 0) return(rep(0, length(radar_cats)))
-    if (!("Hard_Skills" %in% names(df_offers)))      return(rep(0, length(radar_cats)))
     if (!("id" %in% names(df_offers)))              return(rep(0, length(radar_cats)))
     
-    toks <- lapply(df_offers$Hard_Skills, function(x) unique(norm_skill(split_tokens(x))))
+    skill_col <- if ("Hard_Skills_Canon" %in% names(df_offers)) "Hard_Skills_Canon" else if ("Hard_Skills" %in% names(df_offers)) "Hard_Skills" else NA_character_
+    if (is.na(skill_col)) return(rep(0, length(radar_cats)))
+    
+    toks <- lapply(df_offers[[skill_col]], function(x) unique(canonize_vec(split_tokens(x))))
     long <- data.table::data.table(
       offer_id = rep(df_offers$id, lengths(toks)),
       skill    = unlist(toks, use.names = FALSE)
@@ -3030,7 +3114,7 @@ server <- function(input, output, session) {
     freq <- unique(long, by = c("offer_id","cat","skill"))[, .N, by = .(cat, skill)]
     totals <- freq[, .(total = sum(N)), by = cat]
     
-    u <- unique(norm_skill(user_skills))
+    u <- unique(canonize_vec(user_skills))
     hits <- freq[skill %in% u, .(hit = sum(N)), by = cat]
     
     out <- merge(totals, hits, by = "cat", all.x = TRUE)
@@ -3051,6 +3135,7 @@ server <- function(input, output, session) {
     
     # Skills utilisateur = sélection + CV
     user_skills <- unique(c(applied_mp$mp_hard_skills, rv$mp_cv_terms))
+    user_skills <- canonize_vec(user_skills)
     user_skills <- user_skills[!is.na(user_skills) & nzchar(user_skills)]
     
     r_profil <- compute_radar_scores(
@@ -3099,18 +3184,24 @@ server <- function(input, output, session) {
     
     offers_used <- mp_sorted_jobs()
     
-    user_skills <- unique(c(applied_mp$mp_hard_skills, rv$mp_cv_terms))
-    user_skills <- norm_skill(user_skills)
-    user_skills <- user_skills[!is.na(user_skills) & nzchar(user_skills)]
+    # Skills utilisateur (canon) = sélection + CV
+    user_skills_can <- unique(c(applied_mp$mp_hard_skills, rv$mp_cv_terms))
+    user_skills_can <- canonize_vec(user_skills_can)
+    user_skills_can <- user_skills_can[!is.na(user_skills_can) & nzchar(user_skills_can)]
     
     # Points forts : skills réellement présentes (CV + sélection)
-    strong <- unique(c(rv$mp_cv_terms, applied_mp$mp_hard_skills))
-    strong <- strong[!is.na(strong) & nzchar(strong)]
-    strong <- head(strong, 6)
-    
-    # Axes de progression : skills très demandées mais absentes
     freq <- market_skill_freq(offers_used)
     
+    strong_can <- if (nrow(freq) > 0) {
+      intersect(user_skills_can, freq$skill)
+    } else {
+      user_skills_can
+    }
+    strong_can <- strong_can[!is.na(strong_can) & nzchar(strong_can)]
+    strong_can <- head(strong_can, 6)
+    strong <- labelize_vec(strong_can)
+    
+    # Axes de progression : skills très demandées mais absentes
     # ========================= ICI : NOTE "MATCH PARFAIT" =========================
     score <- NA_real_
     
@@ -3122,11 +3213,12 @@ server <- function(input, output, session) {
     # 2) Sinon : on calcule une note robuste à partir du marché (couverture des skills)
     if (is.na(score)) {
       if (nrow(freq) > 0) {
-        freq[, skill_norm := norm_skill(skill)]
-        topN <- head(freq$skill_norm, 25)
+        topN <- head(freq$skill, 30)
         topN <- topN[!is.na(topN) & nzchar(topN)]
-        if (length(topN) > 0) {
-          cov_rate <- mean(topN %in% user_skills)
+        if (length(topN) > 0 && nrow(freq[skill %in% topN]) > 0) {
+          denom <- sum(freq[skill %in% topN, N], na.rm = TRUE)
+          numer <- sum(freq[skill %in% topN & skill %in% user_skills_can, N], na.rm = TRUE)
+          cov_rate <- if (is.finite(denom) && denom > 0) (numer / denom) else 0
           score <- round(100 * cov_rate)
         } else {
           score <- 0
@@ -3149,8 +3241,9 @@ server <- function(input, output, session) {
     
     # On prépare aussi les “missing” pour l’affichage juste après (inchangé)
     if (nrow(freq) > 0) {
-      freq[, skill_norm := norm_skill(skill)]
-      missing <- freq[!skill_norm %in% user_skills][1:6, skill]
+      missing_can <- freq[!skill %in% user_skills_can][1:6, skill]
+      missing_can <- missing_can[!is.na(missing_can) & nzchar(missing_can)]
+      missing <- labelize_vec(missing_can)
     } else {
       missing <- character(0)
     }
