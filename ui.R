@@ -22,7 +22,13 @@ library(leaflet)
 
 # Chargement des données
 data_path <- if (file.exists("www/data_jobs.csv")) "www/data_jobs.csv" else "data_jobs.csv"
-jobs_df <-  data.table::fread(data_path)
+jobs_df <- data.table::fread(
+  data_path,
+  sep = ";",
+  quote = "\"",
+  fill = TRUE,
+  encoding = "UTF-8"
+)
 
 col_hard <- "Hard_Skills"
 col_soft <- "Soft_Skills"

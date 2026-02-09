@@ -21,7 +21,50 @@ library(leaflet)
 # Chargement des données
 # En local, le CSV peut être à la racine; en prod, souvent dans `www/`
 data_path <- if (file.exists("www/data_jobs.csv")) "www/data_jobs.csv" else "data_jobs.csv"
-jobs_df <- data.table::fread(data_path)
+
+# Validation externe (Node) de `Publish_Date` ----------------------------------
+# Si `node` est disponible, on exécute `validate_publish_date.js` pour vérifier
+# que le CSV est cohérent (notamment champs multi-lignes + dates futures).
+run_publish_date_validation <- function(csv_path) {
+  if (!file.exists(csv_path)) return(invisible(FALSE))
+  if (!file.exists("validate_publish_date.js")) return(invisible(FALSE))
+  node_bin <- Sys.which("node")
+  if (!nzchar(node_bin)) return(invisible(FALSE))
+  
+  res <- tryCatch({
+    out <- suppressWarnings(system2(
+      node_bin,
+      args = c("validate_publish_date.js", csv_path),
+      stdout = TRUE, stderr = TRUE
+    ))
+    status <- attr(out, "status") %||% 0L
+    list(status = as.integer(status), output = out)
+  }, error = function(e) {
+    list(status = 2L, output = paste("Validation error:", conditionMessage(e)))
+  })
+  
+  if (isTRUE(res$status != 0L)) {
+    warning(
+      "validate_publish_date.js a détecté un problème dans `Publish_Date`.\n",
+      paste(res$output, collapse = "\n")
+    )
+    return(invisible(FALSE))
+  }
+  
+  invisible(TRUE)
+}
+run_publish_date_validation(data_path)
+
+# Lecture du CSV (explicite) ---------------------------------------------------
+# Important : `fill=TRUE` + `quote='\"'` pour gérer les descriptions multi-lignes
+# et ne pas décaler les colonnes (ce qui fausse `Publish_Date`).
+jobs_df <- data.table::fread(
+  data_path,
+  sep = ";",
+  quote = "\"",
+  fill = TRUE,
+  encoding = "UTF-8"
+)
 
 ###############################################################################.
 # TIMEZONE ---------------------------------------------------------------------
