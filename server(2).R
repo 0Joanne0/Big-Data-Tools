@@ -1161,6 +1161,210 @@ get_adv_lbl <- function(job_row, n = 3){
   lab
 }
 
+# ------------------------------------------------------------------------------
+# Dictionnaires externes (TXT) : hard skills / soft skills / benefits
+# Remplace les taxonomies "en dur" par des mappings chargés depuis fichiers.
+# ------------------------------------------------------------------------------
+resolve_dict_path <- function(candidates){
+  for (p in candidates) {
+    if (file.exists(p)) return(p)
+  }
+  NA_character_
+}
+
+read_norm_dict_txt <- function(path){
+  if (is.na(path) || !nzchar(path) || !file.exists(path)) {
+    stop("Dictionnaire introuvable: ", path)
+  }
+  
+  # Format attendu (par ligne) :  "alias": "canon",
+  lines <- readLines(path, warn = FALSE, encoding = "UTF-8")
+  lines <- trimws(lines)
+  lines <- lines[lines != ""]
+  lines <- lines[!grepl("^#", lines)]
+  
+  m <- stringr::str_match(lines, '^"([^"]+)"\\s*:\\s*"([^"]+)"')
+  keep <- !is.na(m[,2]) & !is.na(m[,3])
+  out <- data.table::data.table(alias = m[keep,2], canon = m[keep,3])
+  
+  out[, alias := trimws(as.character(alias))]
+  out[, canon := trimws(as.character(canon))]
+  out <- out[!is.na(alias) & nzchar(alias) & !is.na(canon) & nzchar(canon)]
+  out
+}
+
+# Chemins (tolérant aux variantes de nommage)
+HARD_DICT_PATH <- resolve_dict_path(c("hard_skills.txt","hardskills.txt","www/hard_skills.txt","www/hardskills.txt"))
+SOFT_DICT_PATH <- resolve_dict_path(c("soft_skills.txt","softskills.txt","www/soft_skills.txt","www/softskills.txt"))
+BENEFITS_DICT_PATH <- resolve_dict_path(c("benefit.txt","benefits.txt","www/benefit.txt","www/benefits.txt"))
+
+HARD_DICT <- read_norm_dict_txt(HARD_DICT_PATH)
+SOFT_DICT <- read_norm_dict_txt(SOFT_DICT_PATH)
+BENEFITS_DICT <- read_norm_dict_txt(BENEFITS_DICT_PATH)
+
+# --- Hard skills (canon + label + colonnes canon/label) ------------------------
+HARD_DICT[, alias_norm := normalize_skill(alias)]
+HARD_DICT[, canon_clean := stringr::str_squish(as.character(canon))]
+HARD_DICT <- HARD_DICT[!is.na(alias_norm) & nzchar(alias_norm) & !is.na(canon_clean) & nzchar(canon_clean)]
+HARD_DICT <- unique(HARD_DICT, by = "alias_norm")
+
+.hard_map <- setNames(HARD_DICT$canon_clean, HARD_DICT$alias_norm)
+
+map_to_canon <- function(x){
+  k <- normalize_skill(x)
+  if (k %in% names(.hard_map)) return(unname(.hard_map[k]))
+  k
+}
+
+canonize_vec <- function(v){
+  v <- v[!is.na(v) & nzchar(trimws(v))]
+  if (!length(v)) return(character(0))
+  unique(vapply(v, map_to_canon, character(1)))
+}
+
+labelize_vec <- function(v){
+  # Ici on affiche le canon tel quel (libellés pilotés par le fichier)
+  canonize_vec(v)
+}
+
+hard_canons <- sort(unique(unname(.hard_map)))
+hard_choices <- setNames(hard_canons, hard_canons)
+
+# Recalcule colonnes canon/label depuis le dictionnaire
+if (has_col(jobs_df, "Hard_Skills")) {
+  jobs_df[, Hard_Skills_Canon := vapply(Hard_Skills, function(x){
+    toks <- split_tokens(x)
+    can  <- canonize_vec(toks)
+    can  <- can[!is.na(can) & nzchar(can)]
+    paste(sort(unique(can)), collapse = ", ")
+  }, character(1))]
+  
+  jobs_df[, Hard_Skills_Label := vapply(Hard_Skills_Canon, function(x){
+    can <- split_tokens(x)
+    lab <- labelize_vec(can)
+    paste(sort(unique(lab)), collapse = ", ")
+  }, character(1))]
+}
+
+token_in_selected <- function(token, selected_terms){
+  if (is.null(selected_terms) || length(selected_terms) == 0) return(FALSE)
+  map_to_canon(token) %in% selected_terms
+}
+token_matches_any <- token_in_selected
+
+# --- Soft skills --------------------------------------------------------------
+SOFT_DICT[, alias_norm := norm_soft_key(alias)]
+SOFT_DICT[, canon_clean := stringr::str_squish(as.character(canon))]
+SOFT_DICT <- SOFT_DICT[!is.na(alias_norm) & nzchar(alias_norm) & !is.na(canon_clean) & nzchar(canon_clean)]
+SOFT_DICT <- unique(SOFT_DICT, by = "alias_norm")
+
+.soft_map <- setNames(SOFT_DICT$canon_clean, SOFT_DICT$alias_norm)
+
+map_soft_one <- function(tok){
+  if (is.null(tok) || !nzchar(tok)) return(NA_character_)
+  if (is_missing_txt(tok)) return(NA_character_)
+  k <- norm_soft_key(tok)
+  if (k %in% names(.soft_map)) return(unname(.soft_map[k]))
+  k
+}
+
+map_soft_vec <- function(tokens){
+  tokens <- tokens[!is.na(tokens) & nzchar(tokens)]
+  out <- vapply(tokens, map_soft_one, character(1))
+  out <- out[!is.na(out) & nzchar(out)]
+  unique(out)
+}
+
+labelize_soft_vec <- function(keys){
+  keys <- keys[!is.na(keys) & nzchar(keys)]
+  if (!length(keys)) return(character(0))
+  keys
+}
+
+if (has_col(jobs_df, "Soft_Skills")) {
+  jobs_df[, Soft_Skills_Canon := vapply(Soft_Skills, function(x){
+    toks <- split_tokens(x)
+    can  <- map_soft_vec(toks)
+    paste(sort(unique(can)), collapse = ", ")
+  }, character(1))]
+}
+
+build_soft_choices <- function(df){
+  if (!has_col(df, "Soft_Skills")) return(setNames(character(0), character(0)))
+  
+  all_tok <- split_tokens(df$Soft_Skills)
+  all_tok <- all_tok[!is_missing_txt(all_tok)]
+  
+  soft_can <- unique(c(unname(.soft_map), map_soft_vec(all_tok)))
+  soft_can <- soft_can[!is.na(soft_can) & nzchar(soft_can)]
+  soft_can <- sort(unique(soft_can))
+  
+  setNames(soft_can, soft_can)
+}
+
+# --- Benefits / Advantages ----------------------------------------------------
+BENEFITS_DICT[, alias_norm := norm_adv_key(alias)]
+BENEFITS_DICT[, canon_clean := stringr::str_squish(as.character(canon))]
+BENEFITS_DICT <- BENEFITS_DICT[!is.na(alias_norm) & nzchar(alias_norm) & !is.na(canon_clean) & nzchar(canon_clean)]
+BENEFITS_DICT <- unique(BENEFITS_DICT, by = "alias_norm")
+
+.benefit_map <- setNames(BENEFITS_DICT$canon_clean, BENEFITS_DICT$alias_norm)
+
+map_adv_one <- function(tok){
+  if (is.null(tok) || !nzchar(tok)) return(NA_character_)
+  if (is_missing_txt(tok)) return(NA_character_)
+  k <- norm_adv_key(tok)
+  if (k %in% names(.benefit_map)) return(unname(.benefit_map[k]))
+  k
+}
+
+map_adv_vec <- function(tokens){
+  tokens <- tokens[!is.na(tokens) & nzchar(tokens)]
+  out <- vapply(tokens, map_adv_one, character(1))
+  out <- out[!is.na(out) & nzchar(out)]
+  unique(out)
+}
+
+labelize_adv_vec <- function(keys){
+  keys <- keys[!is.na(keys) & nzchar(keys)]
+  if (!length(keys)) return(character(0))
+  keys
+}
+
+adv_col <- get_adv_col(jobs_df)
+if (!is.na(adv_col)) {
+  jobs_df[, Advantages_Canon := vapply(.SD[[1]], function(x){
+    toks <- split_tokens(x)
+    can  <- map_adv_vec(toks)
+    paste(sort(unique(can)), collapse = ", ")
+  }, character(1)), .SDcols = adv_col]
+  
+  jobs_df[, Advantages_Label := vapply(Advantages_Canon, function(x){
+    can <- split_tokens(x)
+    lab <- labelize_adv_vec(can)
+    paste(sort(unique(lab)), collapse = ", ")
+  }, character(1))]
+}
+
+build_adv_choices <- function(df){
+  adv_col <- get_adv_col(df)
+  if (is.na(adv_col)) return(setNames(character(0), character(0)))
+  
+  all_tok <- split_tokens(df[[adv_col]])
+  all_tok <- all_tok[!is_missing_txt(all_tok)]
+  
+  adv_can <- unique(c(unname(.benefit_map), map_adv_vec(all_tok)))
+  adv_can <- adv_can[!is.na(adv_can) & nzchar(adv_can)]
+  adv_can <- sort(unique(adv_can))
+  
+  setNames(adv_can, adv_can)
+}
+
+token_in_selected_adv <- function(token, selected_terms){
+  if (is.null(selected_terms) || length(selected_terms) == 0) return(FALSE)
+  map_adv_one(token) %in% selected_terms
+}
+
 # Choix finaux
 SOFT_CHOICES <- build_soft_choices(jobs_df)
 ADV_CHOICES  <- build_adv_choices(jobs_df)
@@ -1692,9 +1896,9 @@ server <- function(input, output, session) {
     
     applied$exp_sector           <- input$exp_sector
     applied$exp_company_category <- input$exp_company_category
-    applied$exp_hard_skills <- canonize_vec(input$exp_hard_skills)
-    applied$exp_soft_skills      <- input$exp_soft_skills
-    applied$exp_advantages       <- input$exp_advantages
+    applied$exp_hard_skills      <- canonize_vec(input$exp_hard_skills)
+    applied$exp_soft_skills      <- map_soft_vec(input$exp_soft_skills)
+    applied$exp_advantages       <- map_adv_vec(input$exp_advantages)
     applied$exp_date             <- input$exp_date
     
     src <- c()
@@ -2798,9 +3002,9 @@ server <- function(input, output, session) {
     
     applied_mp$mp_sector           <- input$mp_sector
     applied_mp$mp_company_category <- input$mp_company_category
-    applied_mp$mp_hard_skills <- canonize_vec(input$mp_hard_skills)
-    applied_mp$mp_soft_skills      <- input$mp_soft_skills
-    applied_mp$mp_advantages       <- input$mp_advantages
+    applied_mp$mp_hard_skills      <- canonize_vec(input$mp_hard_skills)
+    applied_mp$mp_soft_skills      <- map_soft_vec(input$mp_soft_skills)
+    applied_mp$mp_advantages       <- map_adv_vec(input$mp_advantages)
     applied_mp$mp_date             <- input$mp_date
     
     src <- c()
@@ -2810,8 +3014,10 @@ server <- function(input, output, session) {
     applied_mp$mp_source <- src
     
     # Parse CV (on est sûr que cv_path existe ici)
-    vocab <- sort(unique(split_tokens(jobs_df$Hard_Skills)))
-    rv$mp_cv_terms <- extract_skills_from_cv(cv_path, vocab)
+    # On détecte dans le CV à partir des alias du dictionnaire, puis on canonise.
+    vocab_alias <- unique(HARD_DICT$alias)
+    found_alias <- extract_skills_from_cv(cv_path, vocab_alias)
+    rv$mp_cv_terms <- canonize_vec(found_alias)
     
     rv$mp_run_ok <- input$mp_run
     
@@ -2844,8 +3050,8 @@ server <- function(input, output, session) {
     applied_mp$mp_sector           <- input$mp_sector
     applied_mp$mp_company_category <- input$mp_company_category
     applied_mp$mp_hard_skills      <- canonize_vec(input$mp_hard_skills)
-    applied_mp$mp_soft_skills      <- input$mp_soft_skills
-    applied_mp$mp_advantages       <- input$mp_advantages
+    applied_mp$mp_soft_skills      <- map_soft_vec(input$mp_soft_skills)
+    applied_mp$mp_advantages       <- map_adv_vec(input$mp_advantages)
     applied_mp$mp_date             <- input$mp_date
     
     src <- c()
