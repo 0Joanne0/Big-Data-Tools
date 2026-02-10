@@ -245,6 +245,8 @@ split_tokens <- function(x) {
   x <- as.character(x)
   x <- x[!is.na(x) & nzchar(x)]
   if (!length(x)) return(character(0))
+  # Supporte aussi les listes en lignes/bullets (sans casser les technos type "CI/CD")
+  x <- gsub("[\r\n•·]+", ",", x)
   out <- unlist(strsplit(x, "[,;|]"))
   out <- trimws(out)
   out[out != ""]
@@ -302,8 +304,11 @@ COMPANY_NORM_SET <- unique(norm_txt(COMPANY_CHOICES))
 
 ###############################################################################.
 
-# Détection du statut Télétravail : Convertit 0/1 en TRUE/FALSE
-is_remote_true <- function(x) x == 1
+# Détection du statut Télétravail : Convertit 0/1 en TRUE/FALSE (NA-safe)
+is_remote_true <- function(x) {
+  v <- suppressWarnings(as.numeric(x))
+  !is.na(v) & v == 1
+}
 
 
 pick_col <- function(job, cols) {
@@ -348,6 +353,10 @@ get_offer_sources <- function(job_row){
 
 # Affichage des Logos
 source_logo_tag <- function(src){
+  if (is.null(src) || length(src) == 0) return(NULL)
+  src <- as.character(src[1])
+  if (is.na(src) || !nzchar(trimws(src))) return(NULL)
+  
   cls_extra <- dplyr::case_when(
     src == "LinkedIn" ~ "is-linkedin",
     src == "Indeed" ~ "is-indeed",
@@ -389,7 +398,9 @@ render_source_logos <- function(sources){
 # Utilité : "Voir l'offre : logos cliquables vers l'URL
 render_source_logo_links <- function(sources, url){
   if (is.null(sources) || length(sources) == 0) return(NULL)
-  if (is.null(url) || !nzchar(url)) return(NULL)
+  url <- as.character(url %||% "")
+  url <- trimws(url[1])
+  if (!nzchar(url)) return(NULL)
   
   div(class = "offer-sources-links",
       lapply(sources, function(s){
@@ -570,7 +581,7 @@ get_hourly_range <- function(df){
 is_freelance_row <- function(df){
   if (!("Contract_Type" %in% names(df))) return(rep(FALSE, nrow(df)))
   ct <- tolower(trimws(as.character(df$Contract_Type)))
-  ct == "freelance"
+  !is.na(ct) & ct == "freelance"
 }
 
 # Génère le texte "Min - Max" ou juste "Min".
@@ -1454,7 +1465,7 @@ server <- function(input, output, session) {
     toggle_slider("exp_salary_range", disabled = !sal_only)
     dur_ok <- dur_only && (contract %in% c("Stage", "CDD"))
     toggle_slider("exp_duration_range", disabled = !dur_ok)
-    if (tolower(contract) == "freelance") {
+    if (isTRUE(tolower(contract) == "freelance")) {
       set_text("exp_salary_title", "Fourchette de salaire (€ / h)")
     } else {
       set_text("exp_salary_title", "Fourchette de salaire (€ / mois)")
@@ -2666,7 +2677,7 @@ server <- function(input, output, session) {
     dur_ok <- dur_only && (contract %in% c("Stage", "CDD"))
     toggle_slider("mp_duration_range", disabled = !dur_ok)
     
-    if (tolower(contract) == "freelance") {
+    if (isTRUE(tolower(contract) == "freelance")) {
       set_text("mp_salary_title", "Fourchette de salaire (€ / h)")
     } else {
       set_text("mp_salary_title", "Fourchette de salaire (€ / mois)")
@@ -2684,7 +2695,7 @@ server <- function(input, output, session) {
   observeEvent(input$mp_contract, {
     req(input$mp_contract)
     
-    if (tolower(input$mp_contract) == "freelance") {
+    if (isTRUE(tolower(input$mp_contract) == "freelance")) {
       set_text("mp_salary_title", "Fourchette de salaire (€ /h)")
     } else {
       set_text("mp_salary_title", "Fourchette de salaire (€ /mois)")
@@ -2695,7 +2706,7 @@ server <- function(input, output, session) {
       return()
     }
     
-    if (tolower(input$mp_contract) == "freelance") {
+    if (isTRUE(tolower(input$mp_contract) == "freelance")) {
       hr <- get_hourly_range(jobs_df)
       mx <- max(hr$max[is.finite(hr$max)], na.rm = TRUE)
       if (is.finite(mx)) {
@@ -2792,6 +2803,32 @@ server <- function(input, output, session) {
     }, logical(1))]
   }
   
+  # Extraction soft skills depuis PDF (basé sur soft_taxo patterns)
+  extract_softskills_from_cv <- function(pdf_path){
+    if (is.null(pdf_path) || !nzchar(pdf_path)) return(character(0))
+    if (!requireNamespace("pdftools", quietly = TRUE)) return(character(0))
+    if (!exists("soft_taxo")) return(character(0))
+    
+    txt <- paste(pdftools::pdf_text(pdf_path), collapse = " ")
+    txt_low <- tolower(txt)
+    
+    txt_ascii <- txt_low
+    if (requireNamespace("stringi", quietly = TRUE)) {
+      txt_ascii <- stringi::stri_trans_general(txt_low, "Latin-ASCII")
+    } else {
+      txt_ascii <- iconv(txt_low, from = "", to = "ASCII//TRANSLIT")
+    }
+    
+    pat <- soft_taxo$pattern
+    keys <- soft_taxo$soft_key
+    
+    hit <- vapply(seq_along(pat), function(i){
+      stringr::str_detect(txt_low, pat[i]) || stringr::str_detect(txt_ascii, pat[i])
+    }, logical(1))
+    
+    unique(keys[hit])
+  }
+  
   has_mp_cv <- reactive({
     !is.null(input$mp_cv) &&
       !is.null(input$mp_cv$datapath) &&
@@ -2873,6 +2910,8 @@ server <- function(input, output, session) {
     # Parse CV (on est sûr que cv_path existe ici)
     vocab <- sort(unique(split_tokens(jobs_df$Hard_Skills)))
     rv$mp_cv_terms <- extract_skills_from_cv(cv_path, vocab)
+    rv$mp_cv_hard_terms <- canonize_vec(rv$mp_cv_terms)
+    rv$mp_cv_soft_terms <- extract_softskills_from_cv(cv_path)
     
     rv$mp_run_ok <- input$mp_run
     
@@ -2883,24 +2922,72 @@ server <- function(input, output, session) {
     
   }, ignoreInit = TRUE)
   
+  # Bouton "Actualiser la recherche" (Match) : applique les filtres sans reparser le CV
+  observeEvent(input$mp_apply_filters, {
+    req(rv$mp_run_ok > 0)
+    
+    rv$mp_page <- 1
+    
+    tt <- input$mp_title; if (is.null(tt)) tt <- character(0)
+    ll <- input$mp_loc;   if (is.null(ll)) ll <- character(0)
+    
+    applied_mp$mp_title <- trimws(as.character(tt))
+    applied_mp$mp_loc   <- trimws(as.character(ll))
+    
+    applied_mp$mp_contract       <- input$mp_contract
+    applied_mp$mp_duration_only  <- isTRUE(input$mp_duration_only)
+    applied_mp$mp_duration_range <- input$mp_duration_range
+    
+    applied_mp$mp_experience_level <- input$mp_experience_level
+    
+    applied_mp$mp_salary_only  <- isTRUE(input$mp_salary_only)
+    applied_mp$mp_salary_range <- input$mp_salary_range
+    
+    applied_mp$mp_remote <- isTRUE(input$mp_remote)
+    
+    applied_mp$mp_sector           <- input$mp_sector
+    applied_mp$mp_company_category <- input$mp_company_category
+    applied_mp$mp_hard_skills      <- canonize_vec(input$mp_hard_skills)
+    applied_mp$mp_soft_skills      <- input$mp_soft_skills
+    applied_mp$mp_advantages       <- input$mp_advantages
+    applied_mp$mp_date             <- input$mp_date
+    
+    # Sources: si les inputs mp_source_* n'existent pas (UI legacy), on ne change rien
+    if (!is.null(input$mp_source_li) || !is.null(input$mp_source_in) || !is.null(input$mp_source_wttj)) {
+      src <- c()
+      if (isTRUE(input$mp_source_li))   src <- c(src, "LinkedIn")
+      if (isTRUE(input$mp_source_in))   src <- c(src, "Indeed")
+      if (isTRUE(input$mp_source_wttj)) src <- c(src, "Welcome to the Jungle")
+      applied_mp$mp_source <- src
+    }
+    
+  }, ignoreInit = TRUE)
+  
   ## Filtrage Match (copie Explorateur, version Match) -------------------------
   mp_filtered_jobs <- reactive({
     data <- jobs_df
     
     # Objectif titre
     if (length(applied_mp$mp_title) > 0) {
-      terms <- paste(applied_mp$mp_title, collapse = " ")
-      ok_title <- if (has_col(data, "Job_Title"))   match_any_term(data$Job_Title, terms) else rep(FALSE, nrow(data))
-      ok_comp  <- if (has_col(data, "Company"))     match_any_term(data$Company, terms) else rep(FALSE, nrow(data))
-      ok_hard  <- if (has_col(data, "Hard_Skills")) match_any_term(data$Hard_Skills, terms) else rep(FALSE, nrow(data))
+      title_terms <- as.character(applied_mp$mp_title %||% character(0))
+      title_terms <- trimws(title_terms)
+      title_terms <- title_terms[!is.na(title_terms) & nzchar(title_terms)]
+      
+      ok_title <- if (has_col(data, "Job_Title"))   match_any_term(data$Job_Title, title_terms) else rep(FALSE, nrow(data))
+      ok_comp  <- if (has_col(data, "Company"))     match_any_term(data$Company, title_terms) else rep(FALSE, nrow(data))
+      ok_hard  <- if (has_col(data, "Hard_Skills")) match_any_term(data$Hard_Skills, title_terms) else rep(FALSE, nrow(data))
       data <- data[ok_title | ok_comp | ok_hard, ]
     }
     
     
-    # Objectif localisation
-    if (nzchar(applied_mp$mp_loc) && has_col(data, "Location")) {
+    # Objectif localisation (NA-safe + accepte multi-valeurs)
+    loc_terms <- applied_mp$mp_loc
+    loc_terms <- as.character(loc_terms %||% character(0))
+    loc_terms <- trimws(loc_terms)
+    loc_terms <- loc_terms[!is.na(loc_terms) & nzchar(loc_terms)]
+    if (length(loc_terms) > 0 && has_col(data, "Location")) {
       loc_search <- loc_key_vec(data)
-      data <- data[match_any_term(loc_search, applied_mp$mp_loc), ]
+      data <- data[match_any_term(loc_search, loc_terms), ]
     }
     
     
@@ -2972,7 +3059,7 @@ server <- function(input, output, session) {
     # Secteur
     if (length(applied_mp$mp_sector) > 0 && has_col(data, "Category")) {
       data[, Category := clean_txt(Category)]
-      sel <- clean_txt(applied$mp$mp_sector)
+      sel <- clean_txt(applied_mp$mp_sector)
       data <- data[Category %in% sel]
     }
     
@@ -3106,28 +3193,68 @@ server <- function(input, output, session) {
   
   skill_taxo <- data.table::data.table(
     pattern = c(
-      "power\\s*bi|tableau|looker|qlik|superset",
-      "sql|postgres|mysql|bigquery|snowflake",
-      "nosql|mongodb|cassandra|redis",
+      # Visualisation / BI
+      "power\\s*bi|tableau|looker|qlik|superset|bi\\s*tools|dashboard|reporting|excel",
+      
+      # Manipulation / Stockage
+      "sql|postgres|mysql|bigquery|snowflake|redshift|synapse|databricks\\s*sql",
+      "nosql|mongodb|cassandra|redis|elastic|elasticsearch",
+      "data\\s*warehouse|dwh|data\\s*model(ing|isation)|modelisation|mod[eé]lisation",
+      
+      # Langages / Scripting
       "python|\\br\\b|pandas|numpy",
-      "spark|pyspark|hadoop|databricks",
-      "aws|azure|gcp|google\\s*cloud",
-      "ml|machine\\s*learning|scikit|tensorflow|pytorch|nlp|stat|statistics",
-      "git|github|gitlab|airflow|dbt|etl|pipeline|workflow|agile|scrum|kanban"
+      "bash|shell|linux|unix|powershell",
+      
+      # Big Data / Cloud
+      "spark|pyspark|hadoop|kafka|flink",
+      "aws|azure|gcp|google\\s*cloud|cloud\\s*computing|cloud",
+      "kubernetes|k8s|docker|terraform|ansible|helm",
+      
+      # IA / Statistiques
+      "ml|machine\\s*learning|scikit|tensorflow|pytorch|nlp|deep\\s*learning|stat|statistics|regression|classification",
+      
+      # Méthodologie / Workflow
+      "git|github|gitlab|airflow|dbt|etl|pipeline|workflow|ci\\/cd|cicd|agile|scrum|kanban"
     ),
     cat = c(
       "Visualisation & BI",
+      
       "Manipulation & Stockage",
       "Manipulation & Stockage",
+      "Manipulation & Stockage",
+      
       "Langages & Scripting",
+      "Langages & Scripting",
+      
       "Big Data & Cloud",
       "Big Data & Cloud",
+      "Big Data & Cloud",
+      
       "IA & Statistiques",
+      
       "Méthodologie & Workflow"
     )
   )
   
-  norm_skill <- function(x) tolower(trimws(as.character(x)))
+  # Normalisation locale des tokens pour le radar (NA-safe, accents, underscores)
+  norm_skill <- function(x){
+    x <- as.character(x)
+    x[is.na(x)] <- ""
+    x <- tolower(trimws(x))
+    x <- gsub("_", " ", x)
+    x <- gsub("[\r\n]+", " ", x)
+    x <- gsub("\\s+", " ", x)
+    x <- trimws(x)
+    
+    if (requireNamespace("stringi", quietly = TRUE)) {
+      x <- stringi::stri_trans_general(x, "Latin-ASCII")
+      x <- tolower(trimws(x))
+    } else {
+      x <- tolower(trimws(iconv(x, from = "", to = "ASCII//TRANSLIT")))
+    }
+    
+    x
+  }
   
   map_cat_one <- function(tok){
     t <- norm_skill(tok)
@@ -3153,35 +3280,133 @@ server <- function(input, output, session) {
     long <- unique(long, by = c("offer_id", "skill"))
     long[, .N, by = skill][order(-N)]
   }
+
+  # Variante "catégorisée" (hard + soft) utilisée par mp_advice
+  # Doit renvoyer au minimum: cat, skill, N
+  market_skill_freq_cat <- function(df_offers){
+    if (is.null(df_offers) || nrow(df_offers) == 0) return(data.table::data.table())
+    if (!("id" %in% names(df_offers))) return(data.table::data.table())
+
+    out_list <- list()
+
+    # Hard skills
+    hard_col <- if ("Hard_Skills_Canon" %in% names(df_offers)) "Hard_Skills_Canon" else "Hard_Skills"
+    if (hard_col %in% names(df_offers)) {
+      toks <- lapply(df_offers[[hard_col]], function(x) unique(norm_skill(split_tokens(x))))
+      long <- data.table::data.table(
+        offer_id = rep(df_offers$id, lengths(toks)),
+        cat      = "hard",
+        skill    = unlist(toks, use.names = FALSE)
+      )
+      out_list <- c(out_list, list(long))
+    }
+
+    # Soft skills
+    soft_col <- if ("Soft_Skills_Canon" %in% names(df_offers)) "Soft_Skills_Canon" else "Soft_Skills"
+    if (soft_col %in% names(df_offers)) {
+      toks <- lapply(df_offers[[soft_col]], function(x) unique(norm_skill(split_tokens(x))))
+      long <- data.table::data.table(
+        offer_id = rep(df_offers$id, lengths(toks)),
+        cat      = "soft",
+        skill    = unlist(toks, use.names = FALSE)
+      )
+      out_list <- c(out_list, list(long))
+    }
+
+    if (length(out_list) == 0) return(data.table::data.table())
+
+    long_all <- data.table::rbindlist(out_list, use.names = TRUE, fill = TRUE)
+    long_all <- long_all[!is.na(skill) & nzchar(skill)]
+    if (nrow(long_all) == 0) return(data.table::data.table())
+
+    long_all <- unique(long_all, by = c("offer_id", "cat", "skill"))
+    long_all[, .N, by = .(cat, skill)][order(-N)]
+  }
   
   ### Calcul note basé sur la couverture de demande ----
   compute_radar_scores <- function(df_offers, user_skills){
+    # NOTE: évite les pièges data.table (colonnes manquantes) en base R
     if (is.null(df_offers) || nrow(df_offers) == 0) return(rep(0, length(radar_cats)))
-    if (!("Hard_Skills" %in% names(df_offers)))      return(rep(0, length(radar_cats)))
+    hard_col <- if ("Hard_Skills_Canon" %in% names(df_offers)) "Hard_Skills_Canon" else "Hard_Skills"
+    if (!(hard_col %in% names(df_offers)))           return(rep(0, length(radar_cats)))
     if (!("id" %in% names(df_offers)))              return(rep(0, length(radar_cats)))
     
-    toks <- lapply(df_offers$Hard_Skills, function(x) unique(norm_skill(split_tokens(x))))
-    long <- data.table::data.table(
-      offer_id = rep(df_offers$id, lengths(toks)),
-      skill    = unlist(toks, use.names = FALSE)
+    offer_ids <- df_offers$id
+    toks <- lapply(df_offers[[hard_col]], function(x) unique(norm_skill(split_tokens(x))))
+    
+    long <- data.frame(
+      offer_id = rep(offer_ids, lengths(toks)),
+      skill    = unlist(toks, use.names = FALSE),
+      stringsAsFactors = FALSE
     )
+    if (nrow(long) == 0) return(rep(0, length(radar_cats)))
     
-    long[, cat := vapply(skill, map_cat_one, character(1))]
-    long <- long[!is.na(cat) & cat %in% radar_cats]
+    long$cat <- vapply(long$skill, map_cat_one, character(1))
+    long <- long[!is.na(long$cat) & long$cat %in% radar_cats, c("offer_id","cat","skill"), drop = FALSE]
+    if (nrow(long) == 0) return(rep(0, length(radar_cats)))
     
-    freq <- unique(long, by = c("offer_id","cat","skill"))[, .N, by = .(cat, skill)]
-    totals <- freq[, .(total = sum(N)), by = cat]
+    long <- unique(long)
     
-    u <- unique(norm_skill(user_skills))
-    hits <- freq[skill %in% u, .(hit = sum(N)), by = cat]
+    freq <- as.data.frame(table(long$cat, long$skill), stringsAsFactors = FALSE)
+    names(freq) <- c("cat","skill","N")
+    freq <- freq[freq$N > 0, , drop = FALSE]
+    if (nrow(freq) == 0) return(rep(0, length(radar_cats)))
+    
+    totals <- stats::aggregate(N ~ cat, data = freq, sum)
+    names(totals)[2] <- "total"
+    
+    u <- unique(norm_skill(canonize_vec(user_skills)))
+    hits_df <- freq[freq$skill %in% u, , drop = FALSE]
+    hits <- if (nrow(hits_df) > 0) stats::aggregate(N ~ cat, data = hits_df, sum) else data.frame(cat = character(0), N = numeric(0))
+    names(hits)[2] <- "hit"
     
     out <- merge(totals, hits, by = "cat", all.x = TRUE)
-    out[is.na(hit), hit := 0]
-    out[, score := ifelse(total > 0, 10 * hit / total, 0)]
+    out$hit[is.na(out$hit)] <- 0
+    out$score <- ifelse(out$total > 0, 10 * out$hit / out$total, 0)
     
     res <- out$score[match(radar_cats, out$cat)]
     res[is.na(res)] <- 0
     pmin(10, pmax(0, res))
+  }
+
+  # Profil idéal = intensité de demande par catégorie (selon offres filtrées)
+  # Normalisé sur [0,10] avec max(cat)=10 pour refléter la "forme" du marché ciblé.
+  compute_ideal_profile <- function(df_offers){
+    # NOTE: base R pour éviter les pièges data.table
+    if (is.null(df_offers) || nrow(df_offers) == 0) return(rep(0, length(radar_cats)))
+    hard_col <- if ("Hard_Skills_Canon" %in% names(df_offers)) "Hard_Skills_Canon" else "Hard_Skills"
+    if (!(hard_col %in% names(df_offers)))           return(rep(0, length(radar_cats)))
+    if (!("id" %in% names(df_offers)))              return(rep(0, length(radar_cats)))
+    
+    offer_ids <- df_offers$id
+    toks <- lapply(df_offers[[hard_col]], function(x) unique(norm_skill(split_tokens(x))))
+    
+    long <- data.frame(
+      offer_id = rep(offer_ids, lengths(toks)),
+      skill    = unlist(toks, use.names = FALSE),
+      stringsAsFactors = FALSE
+    )
+    if (nrow(long) == 0) return(rep(0, length(radar_cats)))
+    
+    long$cat <- vapply(long$skill, map_cat_one, character(1))
+    long <- long[!is.na(long$cat) & long$cat %in% radar_cats, c("offer_id","cat","skill"), drop = FALSE]
+    if (nrow(long) == 0) return(rep(0, length(radar_cats)))
+    
+    long <- unique(long)
+    
+    freq <- as.data.frame(table(long$cat, long$skill), stringsAsFactors = FALSE)
+    names(freq) <- c("cat","skill","N")
+    freq <- freq[freq$N > 0, , drop = FALSE]
+    if (nrow(freq) == 0) return(rep(0, length(radar_cats)))
+    
+    totals <- stats::aggregate(N ~ cat, data = freq, sum)
+    tvec <- totals$N[match(radar_cats, totals$cat)]
+    tvec[is.na(tvec)] <- 0
+    
+    mx <- suppressWarnings(max(tvec, na.rm = TRUE))
+    if (!is.finite(mx) || mx <= 0) return(rep(0, length(radar_cats)))
+    
+    pmin(10, pmax(0, 10 * tvec / mx))
   }
   
   ## Output radar --------------------------------------------------------------
@@ -3194,9 +3419,10 @@ server <- function(input, output, session) {
     # Skills utilisateur = sélection + CV
     user_skills <- unique(c(applied_mp$mp_hard_skills, rv$mp_cv_terms))
     user_skills <- user_skills[!is.na(user_skills) & nzchar(user_skills)]
+    user_skills <- canonize_vec(user_skills)
     
     r_profil <- compute_radar_scores(offers_used, user_skills)
-    r_ideal  <- rep(10, length(radar_cats))
+    r_ideal  <- compute_ideal_profile(offers_used)
     
     plotly::plot_ly(type = "scatterpolar", fill = "toself") %>%
       plotly::add_trace(
@@ -3232,7 +3458,7 @@ server <- function(input, output, session) {
   
   output$mp_radar_box <- renderUI({
     # AVANT clic
-    if (is.null(rv$mp_run_ok) || rv$mp_run_ok <= 0) {
+    if (is.null(rv$mp_run_ok) || !is.finite(rv$mp_run_ok) || rv$mp_run_ok <= 0) {
       div(class = "mp-radar-placeholder",
           tags$h4("Votre diagnostic apparaîtra ici"),
           tags$p("Déposez votre CV (PDF) puis cliquez sur “Lancer l’analyse”."),
@@ -3252,42 +3478,85 @@ server <- function(input, output, session) {
     
     offers_used <- mp_sorted_jobs()
     
-    # Sécurité si les objets n'existent pas encore
-    cv_hard <- rv$mp_cv_hard_terms; if (is.null(cv_hard)) cv_hard <- character(0)
-    cv_soft <- rv$mp_cv_soft_terms; if (is.null(cv_soft)) cv_soft <- character(0)
+    # CV (hard/soft) : référence principale pour points forts / manquants
+    cv_hard_can <- canonize_vec(rv$mp_cv_hard_terms %||% rv$mp_cv_terms %||% character(0))
+    cv_soft_key <- unique(as.character(rv$mp_cv_soft_terms %||% character(0)))
+    cv_soft_key <- cv_soft_key[!is.na(cv_soft_key) & nzchar(cv_soft_key)]
     
-    sel_hard <- applied_mp$mp_hard_skills; if (is.null(sel_hard)) sel_hard <- character(0)
-    sel_soft <- applied_mp$mp_soft_skills; if (is.null(sel_soft)) sel_soft <- character(0)
+    # Si CV vide, fallback sur sélection utilisateur
+    sel_hard_can <- canonize_vec(applied_mp$mp_hard_skills %||% character(0))
+    sel_soft_key <- map_soft_vec(applied_mp$mp_soft_skills %||% character(0))
     
-    # Skills utilisateur = sélection + CV (hard + soft)
-    user_all <- unique(c(sel_hard, sel_soft, cv_hard, cv_soft))
-    user_all <- norm_skill(user_all)
-    user_all <- user_all[!is.na(user_all) & nzchar(user_all)]
+    cv_empty <- (length(cv_hard_can) == 0 && length(cv_soft_key) == 0)
     
-    # Fréquences de compétences sur les offres filtrées (hard + soft, par cat)
-    freq_cat <- market_skill_freq_cat(offers_used)  # doit renvoyer cat, skill, N
-    if (nrow(freq_cat) > 0) {
-      freq_cat[, skill_norm := norm_skill(skill)]
+    user_hard_base <- if (cv_empty) sel_hard_can else cv_hard_can
+    user_soft_base <- if (cv_empty) sel_soft_key else cv_soft_key
+    
+    # Fréquence = dans combien d'offres le skill apparaît (selon offres filtrées)
+    # (base R pour éviter les pièges data.table dans l'app)
+    freq_all <- data.frame(type = character(0), key = character(0), N = numeric(0), stringsAsFactors = FALSE)
+    
+    if (!is.null(offers_used) && nrow(offers_used) > 0) {
+      offer_ids <- offers_used$id
+      
+      hard_pairs <- do.call(rbind, lapply(seq_len(nrow(offers_used)), function(i){
+        keys <- unique(get_hard_can(offers_used[i]))
+        keys <- keys[!is.na(keys) & nzchar(keys)]
+        if (!length(keys)) return(NULL)
+        data.frame(offer_id = offer_ids[i], key = keys, stringsAsFactors = FALSE)
+      }))
+      
+      soft_pairs <- do.call(rbind, lapply(seq_len(nrow(offers_used)), function(i){
+        keys <- unique(get_soft_can(offers_used[i]))
+        keys <- keys[!is.na(keys) & nzchar(keys)]
+        if (!length(keys)) return(NULL)
+        data.frame(offer_id = offer_ids[i], key = keys, stringsAsFactors = FALSE)
+      }))
+      
+      if (!is.null(hard_pairs) && nrow(hard_pairs) > 0) {
+        hard_pairs <- unique(hard_pairs)
+        hard_freq <- as.data.frame(table(hard_pairs$key), stringsAsFactors = FALSE)
+        names(hard_freq) <- c("key", "N")
+        hard_freq$type <- "hard"
+        freq_all <- rbind(freq_all, hard_freq[, c("type","key","N")])
+      }
+      
+      if (!is.null(soft_pairs) && nrow(soft_pairs) > 0) {
+        soft_pairs <- unique(soft_pairs)
+        soft_freq <- as.data.frame(table(soft_pairs$key), stringsAsFactors = FALSE)
+        names(soft_freq) <- c("key", "N")
+        soft_freq$type <- "soft"
+        freq_all <- rbind(freq_all, soft_freq[, c("type","key","N")])
+      }
     }
     
-    # Points forts = skills du user qui sont aussi demandées dans les offres filtrées
+    if (nrow(freq_all) > 0) {
+      freq_all$in_cv <- (freq_all$type == "hard" & freq_all$key %in% user_hard_base) |
+        (freq_all$type == "soft" & freq_all$key %in% user_soft_base)
+      freq_all$label <- ifelse(
+        freq_all$type == "hard",
+        labelize_vec(freq_all$key),
+        labelize_soft_vec(freq_all$key)
+      )
+    }
+    
+    # Points forts = Top 3 très demandés ET présents dans le CV (ou sélection si CV vide)
     strong <- character(0)
-    if (nrow(freq_cat) > 0 && length(user_all) > 0) {
-      strong <- freq_cat[skill_norm %in% user_all][order(-N)][1:6, skill]
+    if (nrow(freq_all) > 0) {
+      ff_in  <- freq_all[isTRUE(freq_all$in_cv) | freq_all$in_cv == TRUE, , drop = FALSE]
+      ff_in  <- ff_in[order(-ff_in$N), , drop = FALSE]
+      strong <- head(as.character(ff_in$label), 3)
     }
+    strong <- strong[!is.na(strong) & nzchar(strong)]
     
-    # Axes de progression = skills très demandées mais absentes du user
+    # Axes de progression = Top 3 très demandés MAIS absents du CV (ou sélection si CV vide)
     missing <- character(0)
-    if (nrow(freq_cat) > 0) {
-      missing <- freq_cat[!(skill_norm %in% user_all)][order(-N)][1:6, skill]
+    if (nrow(freq_all) > 0) {
+      ff_out <- freq_all[!(freq_all$in_cv %in% TRUE), , drop = FALSE]
+      ff_out <- ff_out[order(-ff_out$N), , drop = FALSE]
+      missing <- head(as.character(ff_out$label), 3)
     }
-    
-    # Fallback si strong est vide (ex: user a des skills non présentes dans les offres filtrées)
-    if (length(strong) == 0) {
-      strong <- unique(c(cv_hard, cv_soft, sel_hard, sel_soft))
-      strong <- strong[!is.na(strong) & nzchar(strong)]
-      strong <- head(strong, 6)
-    }
+    missing <- missing[!is.na(missing) & nzchar(missing)]
     
     tagList(
       tags$h3("Conseils personnalisés"),
@@ -3297,6 +3566,164 @@ server <- function(input, output, session) {
       
       tags$div(style="margin-top:14px;", tags$strong("Axes de Progression :")),
       if (length(missing) > 0) div(class="pills", lapply(missing, function(x) span(class="pill blue", x))) else tags$p("—")
+    )
+  })
+  
+  #############################################################################.
+  # TOP 3 RECOMMANDATIONS (AVEC SCORE) #########################################
+  #############################################################################.
+  
+  # Score (0-100) basé sur la couverture des hard skills de l'offre
+  mp_offer_score <- function(job_row, user_hard_can){
+    offer_can <- get_hard_can(job_row)
+    offer_can <- offer_can[!is.na(offer_can) & nzchar(offer_can)]
+    if (!length(offer_can)) return(0)
+    
+    user_hard_can <- canonize_vec(user_hard_can)
+    user_hard_can <- user_hard_can[!is.na(user_hard_can) & nzchar(user_hard_can)]
+    if (!length(user_hard_can)) return(0)
+    
+    sc <- 100 * length(intersect(unique(offer_can), unique(user_hard_can))) / length(unique(offer_can))
+    max(0, min(100, sc))
+  }
+  
+  # Taille de stack = nombre de hard skills uniques de l'offre
+  mp_offer_stack_n <- function(job_row){
+    offer_can <- get_hard_can(job_row)
+    offer_can <- offer_can[!is.na(offer_can) & nzchar(offer_can)]
+    length(unique(offer_can))
+  }
+  
+  mp_top3_jobs <- reactive({
+    req(rv$mp_run_ok > 0)
+    
+    d <- data.table::copy(mp_filtered_jobs())
+    if (is.null(d) || nrow(d) == 0) return(d)
+    
+    # Skills utilisateur = sélection + CV (hard skills)
+    user_hard <- unique(c(applied_mp$mp_hard_skills, rv$mp_cv_terms))
+    user_hard <- user_hard[!is.na(user_hard) & nzchar(user_hard)]
+    user_hard_can <- canonize_vec(user_hard)
+    
+    d[, .mp_score := vapply(seq_len(.N), function(i) mp_offer_score(d[i], user_hard_can), numeric(1))]
+    d[, .mp_stack_n := vapply(seq_len(.N), function(i) mp_offer_stack_n(d[i]), numeric(1))]
+    
+    # Priorité : 100% match, puis stack la plus riche.
+    d100 <- d[is.finite(.mp_score) & .mp_score >= 100]
+    d100 <- d100[order(-.mp_stack_n)]
+    
+    if (nrow(d100) >= 3) return(head(d100, 3))
+    
+    drest <- d[!(is.finite(.mp_score) & .mp_score >= 100)]
+    drest <- drest[order(-.mp_score, -.mp_stack_n)]
+    
+    out <- data.table::rbindlist(list(d100, drest), use.names = TRUE, fill = TRUE)
+    head(out, 3)
+  })
+  
+  output$mp_count <- renderText({
+    if (is.null(rv$mp_run_ok) || !is.finite(rv$mp_run_ok) || rv$mp_run_ok <= 0) return("")
+    d <- mp_top3_jobs()
+    n <- if (is.null(d)) 0 else nrow(d)
+    paste0(n, " recommandation", ifelse(n > 1, "s", ""))
+  })
+  
+  output$mp_top3 <- renderUI({
+    if (is.null(rv$mp_run_ok) || !is.finite(rv$mp_run_ok) || rv$mp_run_ok <= 0) {
+      return(div(class = "mp-reco-empty", "Lancez l’analyse pour afficher vos 3 meilleures recommandations."))
+    }
+    
+    d <- mp_top3_jobs()
+    if (is.null(d) || nrow(d) == 0) {
+      return(div(class = "mp-reco-empty", "Aucune offre trouvée avec les filtres actuels."))
+    }
+    
+    # Classe badge cohérente avec le reste de l'app
+    badge_cls_from_score <- function(p){
+      if (!is.finite(p)) return("is-gray")
+      if (p >= 70) return("is-green")
+      if (p >= 45) return("is-orange")
+      if (p >  0) return("is-red")
+      "is-gray"
+    }
+    
+    # Petit helper "safe" pour éviter if(NA)
+    is_nz1 <- function(x){
+      if (is.null(x) || length(x) == 0) return(FALSE)
+      x <- as.character(x[1])
+      isTRUE(!is.na(x) && nzchar(trimws(x)))
+    }
+    
+    tagList(
+      lapply(seq_len(nrow(d)), function(i){
+        job <- d[i]
+        
+        score <- job$.mp_score
+        badge_txt <- if (is.finite(score)) paste0(round(score), "% Match") else "Match —"
+        badge_cls <- badge_cls_from_score(score)
+        
+        is_fav <- as.numeric(job$id) %in% rv$favorites
+        
+        title <- pick_col(job, c("Job_Title","Title"))
+        comp  <- pick_col(job, c("Company","Company_Name"))
+        loc   <- pick_col(job, c("Location","City","Region"))
+        cp_raw <- pick_col(job, c("Code_Postal","CP","Postal_Code"))
+        cp_fmt <- format_postal_code(cp_raw)
+        loc_txt <- paste0(loc, if (nzchar(cp_fmt)) paste0(" (", cp_fmt, ")") else "")
+        
+        ct    <- pick_col(job, c("Contract_Type","Contract"))
+        ago   <- if (has_col(job, "Publish_Date")) posted_ago_txt(job$Publish_Date) else ""
+        sources <- get_offer_sources(job)
+        
+        pay <- format_pay(job)
+        pay_txt <- if (is_nz1(pay$txt)) paste0(as.character(pay$txt), " € / ", as.character(pay$unit)) else ""
+        
+        # Affiche toute la stack (hard skills) de l'offre
+        hs_lbl <- get_hard_lbl(job, n = Inf)
+        
+        div(class = "offer-card",
+            onclick = sprintf("Shiny.setInputValue('open_offer', %d, {priority:'event'})",
+                              as.numeric(job$id)
+            ),
+            div(class = "offer-head",
+                div(class = "offer-left",
+                    tags$h3(class = "offer-title", title),
+                    div(class = "offer-sub",
+                        tags$p(class = "offer-company", comp),
+                        tags$p(class = "offer-location", loc_txt)
+                    ),
+                    div(class="pills",
+                        if (nzchar(ct)) span(class = pill_cls(FALSE), ct),
+                        if (has_col(job,"Is_Remote") && isTRUE(is_remote_true(job$Is_Remote))) {
+                          span(class = pill_cls(FALSE), "Télétravail possible")
+                        },
+                        if (is_nz1(pay_txt)) span(class = pill_cls(FALSE), pay_txt)
+                    ),
+                    if (length(hs_lbl) > 0) div(class="offer-line",
+                                                span(class="offer-label", "Stack :"),
+                                                div(class="pills",
+                                                    lapply(hs_lbl, function(x) span(class = pill_cls(FALSE), x))
+                                                )
+                    )
+                ),
+                div(class="offer-right",
+                    tags$button(
+                      class = paste("fav-btn", if (is_fav) "is-on" else ""),
+                      onclick = sprintf(
+                        "event.stopPropagation(); Shiny.setInputValue('toggle_fav', %d, {priority:'event'})",
+                        as.numeric(job$id)
+                      ),
+                      tags$i(class = if (is_fav) "fas fa-heart" else "far fa-heart")
+                    ),
+                    div(class=paste("match-badge", badge_cls), badge_txt),
+                    if (is_nz1(ago)) div(class="offer-time", ago),
+                    div(class = "offer-sources-bottom",
+                        render_source_logos(sources)
+                    )
+                )
+            )
+        )
+      })
     )
   })
   
