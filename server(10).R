@@ -2801,6 +2801,32 @@ server <- function(input, output, session) {
     }, logical(1))]
   }
   
+  # Extraction soft skills depuis PDF (basé sur soft_taxo patterns)
+  extract_softskills_from_cv <- function(pdf_path){
+    if (is.null(pdf_path) || !nzchar(pdf_path)) return(character(0))
+    if (!requireNamespace("pdftools", quietly = TRUE)) return(character(0))
+    if (!exists("soft_taxo")) return(character(0))
+    
+    txt <- paste(pdftools::pdf_text(pdf_path), collapse = " ")
+    txt_low <- tolower(txt)
+    
+    txt_ascii <- txt_low
+    if (requireNamespace("stringi", quietly = TRUE)) {
+      txt_ascii <- stringi::stri_trans_general(txt_low, "Latin-ASCII")
+    } else {
+      txt_ascii <- iconv(txt_low, from = "", to = "ASCII//TRANSLIT")
+    }
+    
+    pat <- soft_taxo$pattern
+    keys <- soft_taxo$soft_key
+    
+    hit <- vapply(seq_along(pat), function(i){
+      stringr::str_detect(txt_low, pat[i]) || stringr::str_detect(txt_ascii, pat[i])
+    }, logical(1))
+    
+    unique(keys[hit])
+  }
+  
   has_mp_cv <- reactive({
     !is.null(input$mp_cv) &&
       !is.null(input$mp_cv$datapath) &&
@@ -2882,6 +2908,8 @@ server <- function(input, output, session) {
     # Parse CV (on est sûr que cv_path existe ici)
     vocab <- sort(unique(split_tokens(jobs_df$Hard_Skills)))
     rv$mp_cv_terms <- extract_skills_from_cv(cv_path, vocab)
+    rv$mp_cv_hard_terms <- canonize_vec(rv$mp_cv_terms)
+    rv$mp_cv_soft_terms <- extract_softskills_from_cv(cv_path)
     
     rv$mp_run_ok <- input$mp_run
     
@@ -3338,48 +3366,75 @@ server <- function(input, output, session) {
     
     offers_used <- mp_sorted_jobs()
     
-    # Sécurité si les objets n'existent pas encore
-    cv_hard <- rv$mp_cv_hard_terms; if (is.null(cv_hard)) cv_hard <- character(0)
-    cv_soft <- rv$mp_cv_soft_terms; if (is.null(cv_soft)) cv_soft <- character(0)
+    # CV (hard/soft) : référence principale pour points forts / manquants
+    cv_hard_can <- canonize_vec(rv$mp_cv_hard_terms %||% rv$mp_cv_terms %||% character(0))
+    cv_soft_key <- unique(as.character(rv$mp_cv_soft_terms %||% character(0)))
+    cv_soft_key <- cv_soft_key[!is.na(cv_soft_key) & nzchar(cv_soft_key)]
     
-    sel_hard <- applied_mp$mp_hard_skills; if (is.null(sel_hard)) sel_hard <- character(0)
-    sel_soft <- applied_mp$mp_soft_skills; if (is.null(sel_soft)) sel_soft <- character(0)
+    # Si CV vide, fallback sur sélection utilisateur
+    sel_hard_can <- canonize_vec(applied_mp$mp_hard_skills %||% character(0))
+    sel_soft_key <- map_soft_vec(applied_mp$mp_soft_skills %||% character(0))
     
-    # Skills utilisateur : CV (référence principale pour les "manquants")
-    user_cv <- unique(c(cv_hard, cv_soft))
-    user_cv <- norm_skill(user_cv)
-    user_cv <- user_cv[!is.na(user_cv) & nzchar(user_cv)]
+    cv_empty <- (length(cv_hard_can) == 0 && length(cv_soft_key) == 0)
     
-    # Skills utilisateur "élargies" (pour les points forts si besoin)
-    user_all <- unique(c(sel_hard, sel_soft, cv_hard, cv_soft))
-    user_all <- norm_skill(user_all)
-    user_all <- user_all[!is.na(user_all) & nzchar(user_all)]
+    user_hard_base <- if (cv_empty) sel_hard_can else cv_hard_can
+    user_soft_base <- if (cv_empty) sel_soft_key else cv_soft_key
     
-    # Fréquences de compétences sur les offres filtrées (hard + soft, par cat)
-    freq_cat <- market_skill_freq_cat(offers_used)  # doit renvoyer cat, skill, N
-    if (nrow(freq_cat) > 0) {
-      freq_cat[, skill_norm := norm_skill(skill)]
+    # Fréquence = dans combien d'offres le skill apparaît (selon offres filtrées)
+    freq_hard <- data.table::data.table()
+    if (!is.null(offers_used) && nrow(offers_used) > 0) {
+      hard_toks <- lapply(seq_len(nrow(offers_used)), function(i){
+        unique(get_hard_can(offers_used[i]))
+      })
+      freq_hard <- data.table::data.table(
+        offer_id = rep(offers_used$id, lengths(hard_toks)),
+        key      = unlist(hard_toks, use.names = FALSE)
+      )
+      freq_hard <- freq_hard[!is.na(key) & nzchar(key)]
+      freq_hard <- unique(freq_hard, by = c("offer_id","key"))[, .N, by = key][order(-N)]
     }
     
-    # Points forts = skills du user qui sont aussi demandées dans les offres filtrées
+    freq_soft <- data.table::data.table()
+    if (!is.null(offers_used) && nrow(offers_used) > 0) {
+      soft_toks <- lapply(seq_len(nrow(offers_used)), function(i){
+        unique(get_soft_can(offers_used[i]))
+      })
+      freq_soft <- data.table::data.table(
+        offer_id = rep(offers_used$id, lengths(soft_toks)),
+        key      = unlist(soft_toks, use.names = FALSE)
+      )
+      freq_soft <- freq_soft[!is.na(key) & nzchar(key)]
+      freq_soft <- unique(freq_soft, by = c("offer_id","key"))[, .N, by = key][order(-N)]
+    }
+    
+    # Assemble + labels
+    freq_all <- data.table::rbindlist(list(
+      if (nrow(freq_hard) > 0) data.table::data.table(type = "hard", key = freq_hard$key, N = freq_hard$N) else NULL,
+      if (nrow(freq_soft) > 0) data.table::data.table(type = "soft", key = freq_soft$key, N = freq_soft$N) else NULL
+    ), use.names = TRUE, fill = TRUE)
+    
+    if (nrow(freq_all) > 0) {
+      freq_all[, in_cv := (type == "hard" & key %in% user_hard_base) | (type == "soft" & key %in% user_soft_base)]
+      freq_all[, label := ifelse(
+        type == "hard",
+        labelize_vec(key),
+        labelize_soft_vec(key)
+      )]
+    }
+    
+    # Points forts = Top 3 très demandés ET présents dans le CV (ou sélection si CV vide)
     strong <- character(0)
-    if (nrow(freq_cat) > 0 && length(user_all) > 0) {
-      strong <- freq_cat[skill_norm %in% user_all][order(-N)][1:6, skill]
+    if (nrow(freq_all) > 0) {
+      strong <- freq_all[isTRUE(in_cv) | in_cv == TRUE][order(-N)][1:3, label]
     }
+    strong <- strong[!is.na(strong) & nzchar(strong)]
     
-    # Axes de progression = skills très demandées mais absentes du CV
+    # Axes de progression = Top 3 très demandés MAIS absents du CV (ou sélection si CV vide)
     missing <- character(0)
-    if (nrow(freq_cat) > 0) {
-      base <- if (length(user_cv) > 0) user_cv else user_all
-      missing <- freq_cat[!(skill_norm %in% base)][order(-N)][1:6, skill]
+    if (nrow(freq_all) > 0) {
+      missing <- freq_all[!(in_cv %in% TRUE)][order(-N)][1:3, label]
     }
-    
-    # Fallback si strong est vide (ex: user a des skills non présentes dans les offres filtrées)
-    if (length(strong) == 0) {
-      strong <- unique(c(cv_hard, cv_soft, sel_hard, sel_soft))
-      strong <- strong[!is.na(strong) & nzchar(strong)]
-      strong <- head(strong, 6)
-    }
+    missing <- missing[!is.na(missing) & nzchar(missing)]
     
     tagList(
       tags$h3("Conseils personnalisés"),
