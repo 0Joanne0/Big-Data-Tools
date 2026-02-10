@@ -21,7 +21,8 @@ library(readxl)
 library(leaflet) 
 
 # Chargement des données
-jobs_df <-  data.table::fread("www/data_jobs.csv")
+jobs_path <- if (file.exists("www/data_jobs.csv")) "www/data_jobs.csv" else "data_jobs.csv"
+jobs_df <-  data.table::fread(jobs_path)
 
 col_hard <- "Hard_Skills"
 col_soft <- "Soft_Skills"
@@ -55,7 +56,7 @@ app_footer <- function() {
               div(class = "footer-top",
                   div(class = "footer-brand",
                       div(class = "footer-brand-row",
-                          img(src = "icons/logo-brand.webp",
+                          img(src = "icons/logo-brand.svg",
                               height = "60px",
                               class = "footer-logo-white"
                           ),
@@ -94,10 +95,9 @@ app_footer <- function() {
   )
 }
 
-navbarPage(
-  shinyjs::useShinyjs(),
+ui <- navbarPage(
   title = div(class = "logo-container",
-              img(src = "icons/logo-brand.webp",
+              img(src = "icons/logo-brand.svg",
                   height = "55px", style = "margin-right:15px;"),
               # Bloc texte empilé
               div(class = "title-stack",
@@ -106,17 +106,20 @@ navbarPage(
   id = "nav",
   position = "fixed-top",
   windowTitle = "Data Career Navigator",
-  header = tags$head(
-    # Polices : Roboto + Poppins + Fira Code + Source Code Pro + Inter + Madani Arabic (Google Fonts)
-    tags$link(href = "https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Poppins:wght@700;800;900&family=Fira+Code:wght@400;600&family=Source+Code+Pro:wght@400;600;700;800;900&family=Inter:wght@400;600;700;800&family=Madani+Arabic:wght@400;600;700&display=swap",
-              rel  = "stylesheet"
-    ),
-    # Police : Open Sauce One (Fontsource via unpkg)
-    tags$link(href = "https://unpkg.com/@fontsource/open-sauce-one@latest/index.css",
-              rel  = "stylesheet"),
-    # CSS et JS du projet
-    tags$link(rel = "stylesheet", type = "text/css", href = "style.css"),
-    tags$script(src = "script.js")
+  header = tagList(
+    shinyjs::useShinyjs(),
+    tags$head(
+      # Polices : Roboto + Poppins + Fira Code + Source Code Pro + Inter + Madani Arabic (Google Fonts)
+      tags$link(href = "https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Poppins:wght@700;800;900&family=Fira+Code:wght@400;600&family=Source+Code+Pro:wght@400;600;700;800;900&family=Inter:wght@400;600;700;800&family=Madani+Arabic:wght@400;600;700&display=swap",
+                rel  = "stylesheet"
+      ),
+      # Police : Open Sauce One (Fontsource via unpkg)
+      tags$link(href = "https://unpkg.com/@fontsource/open-sauce-one@latest/index.css",
+                rel  = "stylesheet"),
+      # CSS et JS du projet
+      tags$link(rel = "stylesheet", type = "text/css", href = "style.css"),
+      tags$script(src = "script.js")
+    )
   ),
   footer = app_footer(),
   
@@ -138,7 +141,7 @@ navbarPage(
                div(class = "road-visual-area",
                    # voiture
                    img(id = "car-icon",
-                       src = "icons/car-icon.webp",
+                       src = "icons/car-icon.svg",
                        class = "car-sprite"
                    ),
                    # Route
@@ -518,6 +521,10 @@ navbarPage(
                                         div(class = "mp-browse-btn", 
                                             "Parcourir"
                                         ),
+                                        div(class = "mp-upload-status",
+                                            tags$span(class = "mp-upload-status-icon", HTML("✓")),
+                                            tags$span(class = "mp-upload-status-text", "Téléversement terminé")
+                                        ),
                                         div(class = "mp-cv-input",
                                             fileInput("mp_cv", 
                                                       label = NULL, 
@@ -763,6 +770,7 @@ navbarPage(
                                             selectInput("mp_sort",
                                                         label = NULL,
                                                         choices = c("Trier" = "relevance",
+                                                                    "Match : meilleur d'abord" = "match",
                                                                     "Date : ordre décroissant" = "date_desc",
                                                                     "Date : ordre croissant" = "date_asc",
                                                                     "Salaire : ordre décroissant" = "salary_desc",
@@ -770,9 +778,6 @@ navbarPage(
                                                         selected = "match")
                                         )
                                     )
-                                ),
-                                conditionalPanel(condition = "input.mp_view === 'list'",
-                                                 uiOutput("mp_results_list")
                                 ),
                                 conditionalPanel(
                                   condition = "input.mp_view === 'map'",
@@ -783,13 +788,11 @@ navbarPage(
                                   tags$p(
                                     class = "map-note",
                                     "Note : les offres en 100% télétravail ne sont pas affichées sur la carte car elles n’ont pas de localisation."
-                                  ),
-                                  
-                                  div(style = "margin-top: 16px;",
-                                      uiOutput("mp_results_list"),
-                                      uiOutput("exp_pager") 
                                   )
-                                )
+                                ),
+                                
+                                uiOutput("mp_results_list"),
+                                uiOutput("mp_pager")
                                 
                             )
                      )
@@ -809,7 +812,7 @@ navbarPage(
                        ),
                        div(class = "fav-hero-right",
                            div(class = "fav-hero-visual",
-                               tags$img(src = "icons/fav-hero-img.webp",
+                              tags$img(src = "icons/fav-hero-img.svg",
                                         class = "fav-hero-img",
                                         alt   = "Illustration favoris")
                            )
@@ -865,6 +868,8 @@ navbarPage(
            )
   )
 )
+
+ui
 
 
 

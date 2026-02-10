@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="520" viewBox="0 0 900 520" role="img" aria-label="Illustration favoris">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#e6f6ff"/>
+      <stop offset="1" stop-color="#bfe8ff"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#006eef"/>
+      <stop offset="1" stop-color="#00c6ff"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="900" height="520" rx="36" fill="url(#bg)"/>
+  <g opacity="0.9">
+    <rect x="70" y="90" width="360" height="120" rx="22" fill="#ffffff"/>
+    <rect x="90" y="118" width="240" height="16" rx="8" fill="#e5e7eb"/>
+    <rect x="90" y="148" width="290" height="16" rx="8" fill="#e5e7eb"/>
+    <rect x="90" y="178" width="200" height="16" rx="8" fill="#e5e7eb"/>
+  </g>
+  <g>
+    <rect x="480" y="120" width="350" height="280" rx="26" fill="url(#card)"/>
+    <circle cx="655" cy="238" r="70" fill="#ffffff" opacity="0.22"/>
+    <path d="M655 310c-46-30-78-58-78-92 0-24 19-44 44-44 14 0 27 6 34 16 7-10 20-16 34-16 25 0 44 20 44 44 0 34-32 62-78 92z"
+          fill="#ffffff" opacity="0.95"/>
+    <text x="655" y="430" text-anchor="middle" font-family="Inter, Roboto, Arial, sans-serif" font-size="22" font-weight="800" fill="#ffffff" opacity="0.95">Favoris</text>
+  </g>
+</svg>
+

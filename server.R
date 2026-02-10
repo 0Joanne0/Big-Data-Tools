@@ -19,7 +19,8 @@ library(readxl)
 library(leaflet)
 
 # Chargement des données
-jobs_df <- data.table::fread("www/data_jobs.csv")
+jobs_path <- if (file.exists("www/data_jobs.csv")) "www/data_jobs.csv" else "data_jobs.csv"
+jobs_df <- data.table::fread(jobs_path)
 
 ###############################################################################.
 # HELPERS ----------------------------------------------------------------------
@@ -52,6 +53,14 @@ token_in_selected <- function(token, selected_terms){
 has_col <- function(df, col) col %in% names(df)
 
 `%||%` <- function(a, b) if (!is.null(a)) a else b
+
+# Badge CSS selon pourcentage de match
+match_badge_class <- function(p){
+  if (!is.finite(p)) return("is-gray")
+  if (p >= 70) return("is-green")
+  if (p >= 45) return("is-orange")
+  "is-red"
+}
 
 # Normalise les valeurs de tri (gère valeurs "code" OU libellés UI) -----------
 normalize_sort_mode <- function(x){
@@ -244,7 +253,7 @@ source_logo_tag <- function(src){
   }
   if (src == "Indeed") {
     return(tags$img(
-      src   = "icons/indeed-logo.jpg",
+      src   = "icons/indeed-logo.svg",
       class = paste("src-logo", cls_extra),
       title = "Indeed"
     ))
@@ -308,6 +317,28 @@ format_postal_code <- function(x) {
   
   ""
 }
+
+# Centroïdes (lat/lng) par code postal (améliore la carte sans API externe)
+# - Utilisé pour imputer des coordonnées manquantes à partir du CP quand dispo
+cp_centroids <- (function(df){
+  if (is.null(df) || nrow(df) == 0) return(data.table::data.table())
+  need <- c("Code_Postal","Latitude","Longitude")
+  if (!all(need %in% names(df))) return(data.table::data.table())
+  
+  tmp <- data.table::copy(df)
+  tmp[, cp_fmt := vapply(Code_Postal, format_postal_code, character(1))]
+  tmp <- tmp[nzchar(cp_fmt) & is.finite(Latitude) & is.finite(Longitude)]
+  if (nrow(tmp) == 0) return(data.table::data.table())
+  
+  out <- tmp[, .(
+    Latitude_cp  = stats::median(Latitude, na.rm = TRUE),
+    Longitude_cp = stats::median(Longitude, na.rm = TRUE),
+    n_cp = .N
+  ), by = cp_fmt]
+  
+  # On garde même n_cp=1 : utile si une offre est la seule connue dans la zone
+  out
+})(jobs_df)
 
 # Pastilles : comparaison souple (SQL vs Sql, etc.)
 norm_txt <- function(x) tolower(trimws(as.character(x)))
@@ -381,6 +412,7 @@ server <- function(input, output, session) {
                        mp_page = 1,
                        mp_cv_terms = character(0),
                        mp_run_ok = 0,
+                       mp_match_cache = NULL,
                        fav_page = 1,
                        cmp_a = NA_real_,
                        cmp_b = NA_real_
@@ -1847,13 +1879,7 @@ server <- function(input, output, session) {
       return()
     }
     
-    # Fichier sélectionné mais upload pas encore prêt >> pas de rouge, pas de spinner
-    if (!has_path) {
-      session$sendCustomMessage("mpCvError", list(on = FALSE))
-      return()
-    }
-    
-    # 3) CV OK -> on enlève l'erreur + on lance le spinner
+    # CV sélectionné -> on enlève l'erreur + on lance le spinner
     session$sendCustomMessage("mpCvError", list(on = FALSE))
     session$sendCustomMessage("mpLoading", TRUE)
     
@@ -1889,9 +1915,37 @@ server <- function(input, output, session) {
     if (isTRUE(input$mp_source_wttj)) src <- c(src, "Welcome to the Jungle")
     applied_mp$mp_source <- src
     
-    # Parse CV (on est sûr que cv_path existe ici)
+    # Parse CV (si upload prêt et fichier accessible)
     vocab <- sort(unique(split_tokens(jobs_df$Hard_Skills)))
-    rv$mp_cv_terms <- extract_skills_from_cv(cv_path, vocab)
+    
+    if (!has_path) {
+      rv$mp_cv_terms <- character(0)
+      shiny::showNotification(
+        "CV en cours d’upload ou non accessible : l’analyse démarre sans lecture du PDF. Réessayez dans quelques secondes si besoin.",
+        type = "warning",
+        duration = 7
+      )
+    } else {
+      rv$mp_cv_terms <- tryCatch(
+        extract_skills_from_cv(cv_path, vocab),
+        error = function(e) {
+          shiny::showNotification(
+            paste0("Impossible de lire le PDF (pdftools / fichier). Détails : ", conditionMessage(e)),
+            type = "error",
+            duration = 10
+          )
+          character(0)
+        }
+      )
+      
+      if (!requireNamespace("pdftools", quietly = TRUE)) {
+        shiny::showNotification(
+          "Le package 'pdftools' n’est pas installé : l’analyse ne peut pas extraire les skills du CV.",
+          type = "warning",
+          duration = 10
+        )
+      }
+    }
     
     rv$mp_run_ok <- input$mp_run
     
@@ -1900,6 +1954,41 @@ server <- function(input, output, session) {
       session$sendCustomMessage("mpLoading", FALSE)
     }, once = TRUE)
     
+  }, ignoreInit = TRUE)
+
+  # Bouton "Actualiser la recherche" (Match) : applique filtres sans re-parser le CV
+  observeEvent(input$mp_apply_filters, {
+    rv$mp_page <- 1
+    
+    tt <- input$mp_title; if (is.null(tt)) tt <- ""
+    ll <- input$mp_loc;   if (is.null(ll)) ll <- ""
+    
+    applied_mp$mp_title <- trimws(as.character(tt))
+    applied_mp$mp_loc   <- trimws(as.character(ll))
+    
+    applied_mp$mp_contract       <- input$mp_contract
+    applied_mp$mp_duration_only  <- isTRUE(input$mp_duration_only)
+    applied_mp$mp_duration_range <- input$mp_duration_range
+    
+    applied_mp$mp_experience_level <- input$mp_experience_level
+    
+    applied_mp$mp_salary_only  <- isTRUE(input$mp_salary_only)
+    applied_mp$mp_salary_range <- input$mp_salary_range
+    
+    applied_mp$mp_remote <- isTRUE(input$mp_remote)
+    
+    applied_mp$mp_sector           <- input$mp_sector
+    applied_mp$mp_company_category <- input$mp_company_category
+    applied_mp$mp_hard_skills      <- input$mp_hard_skills
+    applied_mp$mp_soft_skills      <- input$mp_soft_skills
+    applied_mp$mp_advantages       <- input$mp_advantages
+    applied_mp$mp_date             <- input$mp_date
+    
+    src <- c()
+    if (isTRUE(input$mp_source_li))   src <- c(src, "LinkedIn")
+    if (isTRUE(input$mp_source_in))   src <- c(src, "Indeed")
+    if (isTRUE(input$mp_source_wttj)) src <- c(src, "Welcome to the Jungle")
+    applied_mp$mp_source <- src
   }, ignoreInit = TRUE)
   
   ## Filtrage Match (copie Explorateur, version Match) -------------------------
@@ -2041,10 +2130,44 @@ server <- function(input, output, session) {
     
     data
   })
+
+  # Skills utilisateur (Match) = hard skills sélectionnés + skills extraits du CV
+  mp_user_skills <- reactive({
+    sk <- unique(c(applied_mp$mp_hard_skills, rv$mp_cv_terms))
+    sk <- sk[!is.na(sk) & nzchar(sk)]
+    tolower(trimws(as.character(sk)))
+  })
+
+  # Calcul du score de match par offre (0..100)
+  mp_match_percent_one <- function(job_row, user_skills_norm){
+    if (is.null(user_skills_norm) || length(user_skills_norm) == 0) return(NA_real_)
+    if (!("Hard_Skills" %in% names(job_row))) return(NA_real_)
+    js <- unique(tolower(trimws(split_tokens(pick_col(job_row, "Hard_Skills")))))
+    js <- js[!is.na(js) & nzchar(js)]
+    if (length(js) == 0) return(NA_real_)
+    hit <- length(intersect(js, user_skills_norm))
+    100 * hit / length(js)
+  }
+
+  # Ajoute colonne mp_match (numérique) sur les offres filtrées
+  mp_scored_jobs <- reactive({
+    data <- data.table::copy(mp_filtered_jobs())
+    if (is.null(data) || nrow(data) == 0) return(data)
+    
+    usk <- mp_user_skills()
+    data[, mp_match := vapply(seq_len(.N), function(i) mp_match_percent_one(data[i], usk), numeric(1))]
+    
+    # Cache pour afficher le badge Match aussi dans Favoris/Comparateur
+    if ("id" %in% names(data)) {
+      rv$mp_match_cache <- stats::setNames(as.numeric(data$mp_match), as.character(data$id))
+    }
+    
+    data
+  })
   
   ## Tri Match -----------------------------------------------------------------
   mp_sorted_jobs <- reactive({
-    data <- data.table::copy(mp_filtered_jobs())
+    data <- data.table::copy(mp_scored_jobs())
     if (is.null(data) || nrow(data) == 0) return(data)
     
     data[, .idx := .I]
@@ -2053,6 +2176,12 @@ server <- function(input, output, session) {
     sm <- normalize_sort_mode(input$mp_sort)
     
     if (!is.null(sm)) {
+      
+      # Match : meilleur d'abord
+      if (sm == "match") {
+        if (!("mp_match" %in% names(data))) data[, mp_match := NA_real_]
+        data <- data[order(is.na(mp_match), -mp_match, .idx)]
+      }
       
       # Salaire : décroissant
       if (sm == "salary_desc" && salary_cols_ok(data)) {
@@ -2094,6 +2223,372 @@ server <- function(input, output, session) {
     # Par défaut : si "relevance", on ne force pas de tri ici
     data[, .idx := NULL]
     data
+  })
+
+  # Pagination Match -----------------------------------------------------------
+  mp_total_pages <- reactive({
+    d <- mp_sorted_jobs()
+    if (is.null(d) || nrow(d) == 0) return(1L)
+    # Recommandations : on n’affiche que le TOP 3
+    as.integer(ceiling(min(3L, nrow(d)) / PER_PAGE))
+  })
+  
+  observeEvent(list(rv$mp_run_ok, input$mp_apply_filters, input$mp_sort), {
+    rv$mp_page <- 1
+  }, ignoreInit = TRUE)
+  
+  observeEvent(mp_total_pages(), {
+    tp <- mp_total_pages()
+    if (rv$mp_page < 1) rv$mp_page <- 1
+    if (rv$mp_page > tp) rv$mp_page <- tp
+  }, ignoreInit = TRUE)
+  
+  observeEvent(input$mp_page_goto, {
+    p <- as.integer(input$mp_page_goto)
+    tp <- mp_total_pages()
+    if (!is.na(p)) rv$mp_page <- max(1, min(tp, p))
+  }, ignoreInit = TRUE)
+  
+  observeEvent(input$mp_page_prev, {
+    rv$mp_page <- max(1, rv$mp_page - 1)
+  }, ignoreInit = TRUE)
+  
+  observeEvent(input$mp_page_next, {
+    rv$mp_page <- min(mp_total_pages(), rv$mp_page + 1)
+  }, ignoreInit = TRUE)
+  
+  pager_numbers_mp <- function(cur, total){
+    if (total <= 7) return(seq_len(total))
+    if (cur <= 4) return(c(1,2,3,4,5, NA, total))
+    if (cur >= total - 3) return(c(1, NA, total-4, total-3, total-2, total-1, total))
+    c(1, NA, cur-1, cur, cur+1, NA, total)
+  }
+  
+  output$mp_pager <- renderUI({
+    req(rv$mp_run_ok > 0)
+    d <- mp_sorted_jobs()
+    if (is.null(d) || nrow(d) == 0) return(NULL)
+    
+    # Recommandations : TOP 3 uniquement => pas de pagination
+    if (nrow(d) <= 3) return(NULL)
+    
+    total <- mp_total_pages()
+    cur <- rv$mp_page
+    if (total <= 1) return(NULL)
+    
+    nums <- pager_numbers_mp(cur, total)
+    
+    div(class = "exp-pager-wrap",
+        div(class = "exp-pager",
+            tags$button(
+              class = paste("pg-arrow", if (cur == 1) "is-disabled" else ""),
+              onclick = "Shiny.setInputValue('mp_page_prev', Date.now(), {priority:'event'})",
+              HTML("&#x2039;")
+            ),
+            lapply(nums, function(x){
+              if (is.na(x)) return(div(class = "pg-ellipsis", "..."))
+              tags$button(
+                class = paste("pg-btn", if (x == cur) "is-active" else ""),
+                onclick = sprintf("Shiny.setInputValue('mp_page_goto', %d, {priority:'event'})", x),
+                x
+              )
+            }),
+            tags$button(
+              class = paste("pg-arrow", if (cur == total) "is-disabled" else ""),
+              onclick = "Shiny.setInputValue('mp_page_next', Date.now(), {priority:'event'})",
+              HTML("&#x203A;")
+            )
+        )
+    )
+  })
+
+  # Compteur recommandations
+  output$mp_count <- renderText({
+    tryCatch({
+      if (!(rv$mp_run_ok > 0)) return("Lancez l’analyse pour voir les recommandations")
+      d <- mp_sorted_jobs()
+      n <- if (is.null(d)) 0 else nrow(d)
+      top_n <- min(3L, n)
+      paste0(top_n, " meilleure", ifelse(top_n > 1, "s", ""), " offre", ifelse(top_n > 1, "s", ""), " recommandée", ifelse(top_n > 1, "s", ""))
+    }, error = function(e){
+      paste0("Erreur recommandations : ", conditionMessage(e))
+    })
+  })
+
+  # Liste recommandations ------------------------------------------------------
+  output$mp_results_list <- renderUI({
+    tryCatch({
+      if (!(rv$mp_run_ok > 0)) {
+        return(div(class = "fav-empty", "Déposez votre CV puis cliquez sur “LANCER L'ANALYSE” pour obtenir vos recommandations."))
+      }
+      
+      d <- mp_sorted_jobs()
+      if (is.null(d) || nrow(d) == 0) return(h4("Aucune recommandation avec ces critères."))
+      
+      # Recommandations : TOP 3 uniquement (ultra-explicite)
+      dd <- d[seq_len(min(3L, nrow(d)))]
+      
+      tagList(
+        lapply(seq_len(nrow(dd)), function(i){
+          job <- dd[i]
+        
+          title <- pick_col(job, c("Job_Title","Title"))
+          comp  <- pick_col(job, c("Company","Company_Name"))
+          loc   <- pick_col(job, c("Location","City","Region"))
+          cp_raw <- pick_col(job, c("Code_Postal","CP","Postal_Code"))
+          cp_fmt <- format_postal_code(cp_raw)
+          loc_txt <- paste0(loc, if (nzchar(cp_fmt)) paste0(" (", cp_fmt, ")") else "")
+        
+          ct    <- pick_col(job, c("Contract_Type","Contract"))
+          ago   <- if (has_col(job, "Publish_Date")) posted_ago_txt(job$Publish_Date) else ""
+          sources <- get_offer_sources(job)
+        
+          pay <- format_pay(job)
+          pay_txt <- if (nzchar(pay$txt)) paste0(pay$txt, " € / ", pay$unit) else ""
+        
+          hs <- unique(split_tokens(pick_col(job, c("Hard_Skills"))))
+          hs <- head(hs, 3)
+        
+          adv_col <- c("Benefits","Advantages","Perks")[c("Benefits","Advantages","Perks") %in% names(jobs_df)][1]
+          adv <- if (!is.na(adv_col)) unique(split_tokens(pick_col(job, adv_col))) else character(0)
+          adv <- head(adv, 3)
+        
+          is_fav <- as.numeric(job$id) %in% rv$favorites
+        
+          contract_active <- !is.null(applied_mp$mp_contract) && applied_mp$mp_contract != "Tous"
+          remote_active   <- isTRUE(applied_mp$mp_remote)
+          salary_active   <- isTRUE(applied_mp$mp_salary_only)
+          hard_active     <- length(applied_mp$mp_hard_skills) > 0
+          adv_active      <- length(applied_mp$mp_advantages) > 0
+        
+          mp <- if ("mp_match" %in% names(job)) as.numeric(job$mp_match) else NA_real_
+          badge_txt <- if (is.finite(mp)) paste0(round(mp), "% Match") else "Match —"
+          badge_cls <- match_badge_class(mp)
+        
+          div(
+            class = "offer-card js-offer-card",
+            onclick = sprintf(
+              "Shiny.setInputValue('open_offer', %d, {priority:'event'})",
+              as.numeric(job$id)
+            ),
+            div(class="offer-head",
+                div(class="offer-left",
+                    tags$h3(class="offer-title", title),
+                    div(class="offer-sub",
+                        tags$p(class="offer-company", comp),
+                        tags$p(class="offer-location", loc_txt)
+                    ),
+                    
+                    div(class="pills",
+                        if (nzchar(ct)) {
+                          is_ct_selected <- contract_active &&
+                            tolower(trimws(ct)) == tolower(trimws(applied_mp$mp_contract))
+                          span(class = pill_cls(is_ct_selected), ct)
+                        },
+                        if (has_col(job,"Is_Remote") && is_remote_true(job$Is_Remote)) {
+                          span(class = pill_cls(remote_active), "Télétravail possible")
+                        },
+                        if (nzchar(pay_txt)) {
+                          span(class = pill_cls(salary_active), pay_txt)
+                        }
+                    ),
+                    
+                    if (length(hs) > 0) div(class="offer-line",
+                                            span(class="offer-label", "Stack :"),
+                                            div(class="pills",
+                                                lapply(hs, function(x){
+                                                  span(class = pill_cls(hard_active && token_in_selected(x, applied_mp$mp_hard_skills)), x)
+                                                })
+                                            )
+                    ),
+                    
+                    if (length(adv) > 0) div(class="offer-line",
+                                             span(class="offer-label", "Le(s) + :"),
+                                             div(class="pills",
+                                                 lapply(adv, function(x){
+                                                   span(class = pill_cls(adv_active && token_in_selected(x, applied_mp$mp_advantages)), x)
+                                                 })
+                                             )
+                    )
+                ),
+                div(class="offer-right",
+                    tags$button(
+                      class = paste("fav-btn", if (is_fav) "is-on" else ""),
+                      onclick = sprintf(
+                        "event.stopPropagation(); Shiny.setInputValue('toggle_fav', %d, {priority:'event'})",
+                        as.numeric(job$id)
+                      ),
+                      tags$i(class = if (is_fav) "fas fa-heart" else "far fa-heart")
+                    ),
+                    
+                    div(class=paste("match-badge", badge_cls), badge_txt),
+                    if (nzchar(ago)) div(class="offer-time", ago),
+                    div(class = "offer-sources-bottom",
+                        render_source_logos(sources)
+                    )
+                )
+            )
+          )
+        })
+      )
+    }, error = function(e){
+      div(
+        class = "fav-empty",
+        tags$strong("Erreur pendant le chargement des recommandations :"),
+        tags$pre(style = "white-space: pre-wrap; text-align:left; max-width: 100%;", conditionMessage(e))
+      )
+    })
+  })
+
+  # Carte recommandations ------------------------------------------------------
+  mp_map_data <- reactive({
+    d <- mp_sorted_jobs()
+    if (is.null(d) || nrow(d) == 0) return(d)
+    if (!has_col(d, "Latitude") || !has_col(d, "Longitude")) return(d[0])
+    
+    # Recommandations : TOP 3 uniquement (carte incluse)
+    d <- d[seq_len(min(3L, nrow(d)))]
+    
+    # Copie + imputation des coords manquantes via CP (si possible)
+    d <- data.table::copy(d)
+    d[, .lat0 := Latitude]
+    d[, .lng0 := Longitude]
+    
+    if (has_col(d, "Code_Postal") && nrow(cp_centroids) > 0) {
+      d[, cp_fmt := vapply(Code_Postal, format_postal_code, character(1))]
+      d <- merge(d, cp_centroids, by = "cp_fmt", all.x = TRUE, sort = FALSE)
+      
+      # Remplit Latitude/Longitude si manquantes mais CP connu
+      d[!is.finite(Latitude)  & is.finite(Latitude_cp),  Latitude  := Latitude_cp]
+      d[!is.finite(Longitude) & is.finite(Longitude_cp), Longitude := Longitude_cp]
+      
+      d[, Latitude_cp := NULL]
+      d[, Longitude_cp := NULL]
+      d[, n_cp := NULL]
+    } else {
+      d[, cp_fmt := ""]
+    }
+    
+    d[, coord_src := dplyr::case_when(
+      is.finite(.lat0) & is.finite(.lng0) ~ "exact",
+      is.finite(Latitude) & is.finite(Longitude) ~ "cp",
+      TRUE ~ "none"
+    )]
+    
+    d[, .lat0 := NULL]
+    d[, .lng0 := NULL]
+    
+    d <- d[is.finite(Latitude) & is.finite(Longitude)]
+    d
+  })
+  
+  output$mp_map <- leaflet::renderLeaflet({
+    tryCatch({
+      req(rv$mp_run_ok > 0)
+      d <- mp_map_data()
+      
+      m <- leaflet::leaflet() %>%
+        leaflet::addProviderTiles(leaflet::providers$CartoDB.Positron) %>%
+        leaflet::setView(lng = 2.2137, lat = 46.2276, zoom = 5) %>%
+        leaflet::addScaleBar(position = "bottomleft")
+      
+      n <- if (is.null(d)) 0 else nrow(d)
+      m <- m %>% leaflet::addControl(
+        html = paste0("<div class='map-count'>", n, " offre", ifelse(n > 1, "s", ""), "</div>"),
+        position = "topright"
+      )
+      
+      if (!is.null(d) && n > 0) {
+        title <- if (has_col(d, "Job_Title")) as.character(d$Job_Title) else ""
+        comp  <- if (has_col(d, "Company"))   as.character(d$Company)   else ""
+        loc   <- if (has_col(d, "Location"))  as.character(d$Location)  else ""
+        cp    <- if (has_col(d, "Code_Postal")) vapply(d$Code_Postal, format_postal_code, character(1)) else rep("", n)
+        mp    <- if (has_col(d, "mp_match")) as.numeric(d$mp_match) else rep(NA_real_, n)
+        
+        # Couleur selon match
+        pal <- leaflet::colorNumeric(
+          palette = c("#ef4444", "#f59e0b", "#10b981"),
+          domain = mp,
+          na.color = "#94a3b8"
+        )
+        
+        # Rayon & opacité légèrement différents si coords imputées via CP
+        coord_src <- if (has_col(d, "coord_src")) as.character(d$coord_src) else rep("exact", n)
+        rad <- ifelse(coord_src == "cp", 5.5, 7)
+        op  <- ifelse(coord_src == "cp", 0.65, 0.85)
+        
+        popup <- mapply(function(id, t, c, l, cp1, mm, src){
+          t <- ifelse(is.na(t), "", t)
+          c <- ifelse(is.na(c), "", c)
+          l <- ifelse(is.na(l), "", l)
+          cp1 <- ifelse(is.na(cp1), "", cp1)
+          mm <- ifelse(is.na(mm) | !is.finite(mm), NA_real_, mm)
+          
+          match_line <- if (is.finite(mm)) paste0("<div><b>Match :</b> ", round(mm), "%</div>") else ""
+          cp_line <- if (nzchar(cp1)) paste0("<div><b>CP :</b> ", htmltools::htmlEscape(cp1), "</div>") else ""
+          src_line <- if (identical(src, "cp")) "<div style='opacity:.75'><i>Coordonnées approximées (centroïde CP)</i></div>" else ""
+          paste0(
+            "<div class='map-popup' onclick=\"Shiny.setInputValue('open_offer', ", id, ", {priority:'event'})\">",
+            "<b>", htmltools::htmlEscape(t), "</b><br>",
+            htmltools::htmlEscape(c), "<br>",
+            htmltools::htmlEscape(l),
+            match_line,
+            cp_line,
+            src_line,
+            "</div>"
+          )
+        }, d$id, title, comp, loc, cp, mp, coord_src, SIMPLIFY = TRUE, USE.NAMES = FALSE)
+        
+        label_vec <- if (has_col(d, "Job_Title")) as.character(d$Job_Title) else NULL
+        label_vec <- if (!is.null(label_vec)) {
+          mapply(function(t, mm){
+            t <- ifelse(is.na(t), "", t)
+            if (is.finite(mm)) paste0(t, " — ", round(mm), "% match") else t
+          }, label_vec, mp, SIMPLIFY = TRUE, USE.NAMES = FALSE)
+        } else NULL
+        
+        m <- m %>% leaflet::addCircleMarkers(
+          data = d,
+          lng = ~Longitude, lat = ~Latitude,
+          radius = rad,
+          stroke = TRUE, weight = 1.2, color = "#ffffff",
+          fillColor = pal(mp),
+          fillOpacity = op,
+          popup = popup,
+          label = label_vec,
+          group = "jobs_pts",
+          clusterOptions = CLUSTER_OPTS,
+          popupOptions = leaflet::popupOptions(className = "job-popup")
+        )
+        
+        # Centrage auto sur les offres recommandées
+        m <- m %>% leaflet::fitBounds(
+          lng1 = min(d$Longitude, na.rm = TRUE),
+          lat1 = min(d$Latitude,  na.rm = TRUE),
+          lng2 = max(d$Longitude, na.rm = TRUE),
+          lat2 = max(d$Latitude,  na.rm = TRUE)
+        )
+        
+        # Légende
+        m <- m %>% leaflet::addLegend(
+          position = "bottomright",
+          pal = pal,
+          values = mp,
+          title = "Score Match (%)",
+          opacity = 1
+        )
+      }
+      
+      m
+    }, error = function(e){
+      leaflet::leaflet() %>%
+        leaflet::addProviderTiles(leaflet::providers$CartoDB.Positron) %>%
+        leaflet::setView(lng = 2.2137, lat = 46.2276, zoom = 5) %>%
+        leaflet::addControl(
+          html = paste0("<div class='map-count'>Erreur carte : ", htmltools::htmlEscape(conditionMessage(e)), "</div>"),
+          position = "topright"
+        )
+    })
   })
   
   ## Graphique -----------------------------------------------------------------
@@ -2272,6 +2767,15 @@ server <- function(input, output, session) {
   
   # petit helper: badge match
   get_match_percent <- function(job_row){
+    # Cache match calculé (Match Parfait) si dispo
+    if (!is.null(rv$mp_match_cache) && "id" %in% names(job_row)) {
+      k <- as.character(job_row$id[1])
+      if (!is.na(k) && k %in% names(rv$mp_match_cache)) {
+        v <- suppressWarnings(as.numeric(rv$mp_match_cache[[k]]))
+        if (is.finite(v)) return(max(0, min(100, v)))
+      }
+    }
+    
     raw <- pick_col(job_row, c("Match", "Match_Score", "Match_Percent", "Score_Match"))
     if (!nzchar(raw)) return(NA_real_)
     v <- suppressWarnings(as.numeric(gsub("[^0-9.]", "", raw)))
@@ -2279,13 +2783,6 @@ server <- function(input, output, session) {
     if (v <= 1) v <- v * 100
     v <- max(0, min(100, v))
     v
-  }
-  
-  match_badge_class <- function(p){
-    if (!is.finite(p)) return("is-gray")
-    if (p >= 70) return("is-green")
-    if (p >= 45) return("is-orange")
-    "is-red"
   }
   
   # -------------------------------
@@ -2680,6 +3177,8 @@ server <- function(input, output, session) {
   })
   
 }
+
+server
 
 
 
