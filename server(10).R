@@ -3540,7 +3540,15 @@ server <- function(input, output, session) {
     user_hard_can <- user_hard_can[!is.na(user_hard_can) & nzchar(user_hard_can)]
     if (!length(user_hard_can)) return(0)
     
-    100 * length(intersect(unique(offer_can), unique(user_hard_can))) / length(unique(offer_can))
+    sc <- 100 * length(intersect(unique(offer_can), unique(user_hard_can))) / length(unique(offer_can))
+    max(0, min(100, sc))
+  }
+  
+  # Taille de stack = nombre de hard skills uniques de l'offre
+  mp_offer_stack_n <- function(job_row){
+    offer_can <- get_hard_can(job_row)
+    offer_can <- offer_can[!is.na(offer_can) & nzchar(offer_can)]
+    length(unique(offer_can))
   }
   
   mp_top3_jobs <- reactive({
@@ -3555,8 +3563,19 @@ server <- function(input, output, session) {
     user_hard_can <- canonize_vec(user_hard)
     
     d[, .mp_score := vapply(seq_len(.N), function(i) mp_offer_score(d[i], user_hard_can), numeric(1))]
-    d <- d[order(-.mp_score)]
-    head(d, 3)
+    d[, .mp_stack_n := vapply(seq_len(.N), function(i) mp_offer_stack_n(d[i]), numeric(1))]
+    
+    # Priorité : 100% match, puis stack la plus riche.
+    d100 <- d[is.finite(.mp_score) & .mp_score >= 100]
+    d100 <- d100[order(-.mp_stack_n)]
+    
+    if (nrow(d100) >= 3) return(head(d100, 3))
+    
+    drest <- d[!(is.finite(.mp_score) & .mp_score >= 100)]
+    drest <- drest[order(-.mp_score, -.mp_stack_n)]
+    
+    out <- data.table::rbindlist(list(d100, drest), use.names = TRUE, fill = TRUE)
+    head(out, 3)
   })
   
   output$mp_count <- renderText({
