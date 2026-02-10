@@ -2898,10 +2898,13 @@ server <- function(input, output, session) {
     
     # Objectif titre
     if (length(applied_mp$mp_title) > 0) {
-      terms <- paste(applied_mp$mp_title, collapse = " ")
-      ok_title <- if (has_col(data, "Job_Title"))   match_any_term(data$Job_Title, terms) else rep(FALSE, nrow(data))
-      ok_comp  <- if (has_col(data, "Company"))     match_any_term(data$Company, terms) else rep(FALSE, nrow(data))
-      ok_hard  <- if (has_col(data, "Hard_Skills")) match_any_term(data$Hard_Skills, terms) else rep(FALSE, nrow(data))
+      title_terms <- as.character(applied_mp$mp_title %||% character(0))
+      title_terms <- trimws(title_terms)
+      title_terms <- title_terms[!is.na(title_terms) & nzchar(title_terms)]
+      
+      ok_title <- if (has_col(data, "Job_Title"))   match_any_term(data$Job_Title, title_terms) else rep(FALSE, nrow(data))
+      ok_comp  <- if (has_col(data, "Company"))     match_any_term(data$Company, title_terms) else rep(FALSE, nrow(data))
+      ok_hard  <- if (has_col(data, "Hard_Skills")) match_any_term(data$Hard_Skills, title_terms) else rep(FALSE, nrow(data))
       data <- data[ok_title | ok_comp | ok_hard, ]
     }
     
@@ -3314,7 +3317,12 @@ server <- function(input, output, session) {
     sel_hard <- applied_mp$mp_hard_skills; if (is.null(sel_hard)) sel_hard <- character(0)
     sel_soft <- applied_mp$mp_soft_skills; if (is.null(sel_soft)) sel_soft <- character(0)
     
-    # Skills utilisateur = sélection + CV (hard + soft)
+    # Skills utilisateur : CV (référence principale pour les "manquants")
+    user_cv <- unique(c(cv_hard, cv_soft))
+    user_cv <- norm_skill(user_cv)
+    user_cv <- user_cv[!is.na(user_cv) & nzchar(user_cv)]
+    
+    # Skills utilisateur "élargies" (pour les points forts si besoin)
     user_all <- unique(c(sel_hard, sel_soft, cv_hard, cv_soft))
     user_all <- norm_skill(user_all)
     user_all <- user_all[!is.na(user_all) & nzchar(user_all)]
@@ -3331,10 +3339,11 @@ server <- function(input, output, session) {
       strong <- freq_cat[skill_norm %in% user_all][order(-N)][1:6, skill]
     }
     
-    # Axes de progression = skills très demandées mais absentes du user
+    # Axes de progression = skills très demandées mais absentes du CV
     missing <- character(0)
     if (nrow(freq_cat) > 0) {
-      missing <- freq_cat[!(skill_norm %in% user_all)][order(-N)][1:6, skill]
+      base <- if (length(user_cv) > 0) user_cv else user_all
+      missing <- freq_cat[!(skill_norm %in% base)][order(-N)][1:6, skill]
     }
     
     # Fallback si strong est vide (ex: user a des skills non présentes dans les offres filtrées)
