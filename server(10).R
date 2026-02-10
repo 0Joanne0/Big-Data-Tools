@@ -245,6 +245,8 @@ split_tokens <- function(x) {
   x <- as.character(x)
   x <- x[!is.na(x) & nzchar(x)]
   if (!length(x)) return(character(0))
+  # Supporte aussi les listes en lignes/bullets (sans casser les technos type "CI/CD")
+  x <- gsub("[\r\n•·]+", ",", x)
   out <- unlist(strsplit(x, "[,;|]"))
   out <- trimws(out)
   out[out != ""]
@@ -2917,6 +2919,47 @@ server <- function(input, output, session) {
     session$onFlushed(function() {
       session$sendCustomMessage("mpLoading", FALSE)
     }, once = TRUE)
+    
+  }, ignoreInit = TRUE)
+  
+  # Bouton "Actualiser la recherche" (Match) : applique les filtres sans reparser le CV
+  observeEvent(input$mp_apply_filters, {
+    req(rv$mp_run_ok > 0)
+    
+    rv$mp_page <- 1
+    
+    tt <- input$mp_title; if (is.null(tt)) tt <- character(0)
+    ll <- input$mp_loc;   if (is.null(ll)) ll <- character(0)
+    
+    applied_mp$mp_title <- trimws(as.character(tt))
+    applied_mp$mp_loc   <- trimws(as.character(ll))
+    
+    applied_mp$mp_contract       <- input$mp_contract
+    applied_mp$mp_duration_only  <- isTRUE(input$mp_duration_only)
+    applied_mp$mp_duration_range <- input$mp_duration_range
+    
+    applied_mp$mp_experience_level <- input$mp_experience_level
+    
+    applied_mp$mp_salary_only  <- isTRUE(input$mp_salary_only)
+    applied_mp$mp_salary_range <- input$mp_salary_range
+    
+    applied_mp$mp_remote <- isTRUE(input$mp_remote)
+    
+    applied_mp$mp_sector           <- input$mp_sector
+    applied_mp$mp_company_category <- input$mp_company_category
+    applied_mp$mp_hard_skills      <- canonize_vec(input$mp_hard_skills)
+    applied_mp$mp_soft_skills      <- input$mp_soft_skills
+    applied_mp$mp_advantages       <- input$mp_advantages
+    applied_mp$mp_date             <- input$mp_date
+    
+    # Sources: si les inputs mp_source_* n'existent pas (UI legacy), on ne change rien
+    if (!is.null(input$mp_source_li) || !is.null(input$mp_source_in) || !is.null(input$mp_source_wttj)) {
+      src <- c()
+      if (isTRUE(input$mp_source_li))   src <- c(src, "LinkedIn")
+      if (isTRUE(input$mp_source_in))   src <- c(src, "Indeed")
+      if (isTRUE(input$mp_source_wttj)) src <- c(src, "Welcome to the Jungle")
+      applied_mp$mp_source <- src
+    }
     
   }, ignoreInit = TRUE)
   
