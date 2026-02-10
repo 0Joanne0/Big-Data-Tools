@@ -2900,10 +2900,14 @@ server <- function(input, output, session) {
     }
     
     
-    # Objectif localisation
-    if (nzchar(applied_mp$mp_loc) && has_col(data, "Location")) {
+    # Objectif localisation (NA-safe + accepte multi-valeurs)
+    loc_terms <- applied_mp$mp_loc
+    loc_terms <- as.character(loc_terms %||% character(0))
+    loc_terms <- trimws(loc_terms)
+    loc_terms <- loc_terms[!is.na(loc_terms) & nzchar(loc_terms)]
+    if (length(loc_terms) > 0 && has_col(data, "Location")) {
       loc_search <- loc_key_vec(data)
-      data <- data[match_any_term(loc_search, applied_mp$mp_loc), ]
+      data <- data[match_any_term(loc_search, loc_terms), ]
     }
     
     
