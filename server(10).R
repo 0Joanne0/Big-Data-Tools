@@ -3193,28 +3193,68 @@ server <- function(input, output, session) {
   
   skill_taxo <- data.table::data.table(
     pattern = c(
-      "power\\s*bi|tableau|looker|qlik|superset",
-      "sql|postgres|mysql|bigquery|snowflake",
-      "nosql|mongodb|cassandra|redis",
+      # Visualisation / BI
+      "power\\s*bi|tableau|looker|qlik|superset|bi\\s*tools|dashboard|reporting|excel",
+      
+      # Manipulation / Stockage
+      "sql|postgres|mysql|bigquery|snowflake|redshift|synapse|databricks\\s*sql",
+      "nosql|mongodb|cassandra|redis|elastic|elasticsearch",
+      "data\\s*warehouse|dwh|data\\s*model(ing|isation)|modelisation|mod[eé]lisation",
+      
+      # Langages / Scripting
       "python|\\br\\b|pandas|numpy",
-      "spark|pyspark|hadoop|databricks",
-      "aws|azure|gcp|google\\s*cloud",
-      "ml|machine\\s*learning|scikit|tensorflow|pytorch|nlp|stat|statistics",
-      "git|github|gitlab|airflow|dbt|etl|pipeline|workflow|agile|scrum|kanban"
+      "bash|shell|linux|unix|powershell",
+      
+      # Big Data / Cloud
+      "spark|pyspark|hadoop|kafka|flink",
+      "aws|azure|gcp|google\\s*cloud|cloud\\s*computing|cloud",
+      "kubernetes|k8s|docker|terraform|ansible|helm",
+      
+      # IA / Statistiques
+      "ml|machine\\s*learning|scikit|tensorflow|pytorch|nlp|deep\\s*learning|stat|statistics|regression|classification",
+      
+      # Méthodologie / Workflow
+      "git|github|gitlab|airflow|dbt|etl|pipeline|workflow|ci\\/cd|cicd|agile|scrum|kanban"
     ),
     cat = c(
       "Visualisation & BI",
+      
       "Manipulation & Stockage",
       "Manipulation & Stockage",
+      "Manipulation & Stockage",
+      
       "Langages & Scripting",
+      "Langages & Scripting",
+      
       "Big Data & Cloud",
       "Big Data & Cloud",
+      "Big Data & Cloud",
+      
       "IA & Statistiques",
+      
       "Méthodologie & Workflow"
     )
   )
   
-  norm_skill <- function(x) tolower(trimws(as.character(x)))
+  # Normalisation locale des tokens pour le radar (NA-safe, accents, underscores)
+  norm_skill <- function(x){
+    x <- as.character(x)
+    x[is.na(x)] <- ""
+    x <- tolower(trimws(x))
+    x <- gsub("_", " ", x)
+    x <- gsub("[\r\n]+", " ", x)
+    x <- gsub("\\s+", " ", x)
+    x <- trimws(x)
+    
+    if (requireNamespace("stringi", quietly = TRUE)) {
+      x <- stringi::stri_trans_general(x, "Latin-ASCII")
+      x <- tolower(trimws(x))
+    } else {
+      x <- tolower(trimws(iconv(x, from = "", to = "ASCII//TRANSLIT")))
+    }
+    
+    x
+  }
   
   map_cat_one <- function(tok){
     t <- norm_skill(tok)
@@ -3287,11 +3327,12 @@ server <- function(input, output, session) {
   compute_radar_scores <- function(df_offers, user_skills){
     # NOTE: évite les pièges data.table (colonnes manquantes) en base R
     if (is.null(df_offers) || nrow(df_offers) == 0) return(rep(0, length(radar_cats)))
-    if (!("Hard_Skills" %in% names(df_offers)))      return(rep(0, length(radar_cats)))
+    hard_col <- if ("Hard_Skills_Canon" %in% names(df_offers)) "Hard_Skills_Canon" else "Hard_Skills"
+    if (!(hard_col %in% names(df_offers)))           return(rep(0, length(radar_cats)))
     if (!("id" %in% names(df_offers)))              return(rep(0, length(radar_cats)))
     
     offer_ids <- df_offers$id
-    toks <- lapply(df_offers$Hard_Skills, function(x) unique(norm_skill(split_tokens(x))))
+    toks <- lapply(df_offers[[hard_col]], function(x) unique(norm_skill(split_tokens(x))))
     
     long <- data.frame(
       offer_id = rep(offer_ids, lengths(toks)),
@@ -3314,7 +3355,7 @@ server <- function(input, output, session) {
     totals <- stats::aggregate(N ~ cat, data = freq, sum)
     names(totals)[2] <- "total"
     
-    u <- unique(norm_skill(user_skills))
+    u <- unique(norm_skill(canonize_vec(user_skills)))
     hits_df <- freq[freq$skill %in% u, , drop = FALSE]
     hits <- if (nrow(hits_df) > 0) stats::aggregate(N ~ cat, data = hits_df, sum) else data.frame(cat = character(0), N = numeric(0))
     names(hits)[2] <- "hit"
@@ -3333,11 +3374,12 @@ server <- function(input, output, session) {
   compute_ideal_profile <- function(df_offers){
     # NOTE: base R pour éviter les pièges data.table
     if (is.null(df_offers) || nrow(df_offers) == 0) return(rep(0, length(radar_cats)))
-    if (!("Hard_Skills" %in% names(df_offers)))      return(rep(0, length(radar_cats)))
+    hard_col <- if ("Hard_Skills_Canon" %in% names(df_offers)) "Hard_Skills_Canon" else "Hard_Skills"
+    if (!(hard_col %in% names(df_offers)))           return(rep(0, length(radar_cats)))
     if (!("id" %in% names(df_offers)))              return(rep(0, length(radar_cats)))
     
     offer_ids <- df_offers$id
-    toks <- lapply(df_offers$Hard_Skills, function(x) unique(norm_skill(split_tokens(x))))
+    toks <- lapply(df_offers[[hard_col]], function(x) unique(norm_skill(split_tokens(x))))
     
     long <- data.frame(
       offer_id = rep(offer_ids, lengths(toks)),
@@ -3377,6 +3419,7 @@ server <- function(input, output, session) {
     # Skills utilisateur = sélection + CV
     user_skills <- unique(c(applied_mp$mp_hard_skills, rv$mp_cv_terms))
     user_skills <- user_skills[!is.na(user_skills) & nzchar(user_skills)]
+    user_skills <- canonize_vec(user_skills)
     
     r_profil <- compute_radar_scores(offers_used, user_skills)
     r_ideal  <- compute_ideal_profile(offers_used)
