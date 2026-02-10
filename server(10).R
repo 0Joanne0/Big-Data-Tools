@@ -3301,6 +3301,137 @@ server <- function(input, output, session) {
   })
   
   #############################################################################.
+  # TOP 3 RECOMMANDATIONS (AVEC SCORE) #########################################
+  #############################################################################.
+  
+  # Score (0-100) basé sur la couverture des hard skills de l'offre
+  mp_offer_score <- function(job_row, user_hard_can){
+    offer_can <- get_hard_can(job_row)
+    offer_can <- offer_can[!is.na(offer_can) & nzchar(offer_can)]
+    if (!length(offer_can)) return(0)
+    
+    user_hard_can <- canonize_vec(user_hard_can)
+    user_hard_can <- user_hard_can[!is.na(user_hard_can) & nzchar(user_hard_can)]
+    if (!length(user_hard_can)) return(0)
+    
+    100 * length(intersect(unique(offer_can), unique(user_hard_can))) / length(unique(offer_can))
+  }
+  
+  mp_top3_jobs <- reactive({
+    req(rv$mp_run_ok > 0)
+    
+    d <- data.table::copy(mp_filtered_jobs())
+    if (is.null(d) || nrow(d) == 0) return(d)
+    
+    # Skills utilisateur = sélection + CV (hard skills)
+    user_hard <- unique(c(applied_mp$mp_hard_skills, rv$mp_cv_terms))
+    user_hard <- user_hard[!is.na(user_hard) & nzchar(user_hard)]
+    user_hard_can <- canonize_vec(user_hard)
+    
+    d[, .mp_score := vapply(seq_len(.N), function(i) mp_offer_score(d[i], user_hard_can), numeric(1))]
+    d <- d[order(-.mp_score)]
+    head(d, 3)
+  })
+  
+  output$mp_count <- renderText({
+    if (is.null(rv$mp_run_ok) || rv$mp_run_ok <= 0) return("")
+    d <- mp_top3_jobs()
+    n <- if (is.null(d)) 0 else nrow(d)
+    paste0(n, " recommandation", ifelse(n > 1, "s", ""))
+  })
+  
+  output$mp_top3 <- renderUI({
+    if (is.null(rv$mp_run_ok) || rv$mp_run_ok <= 0) {
+      return(div(class = "mp-reco-empty", "Lancez l’analyse pour afficher vos 3 meilleures recommandations."))
+    }
+    
+    d <- mp_top3_jobs()
+    if (is.null(d) || nrow(d) == 0) {
+      return(div(class = "mp-reco-empty", "Aucune offre trouvée avec les filtres actuels."))
+    }
+    
+    # Classe badge cohérente avec le reste de l'app
+    badge_cls_from_score <- function(p){
+      if (!is.finite(p)) return("is-gray")
+      if (p >= 70) return("is-green")
+      if (p >= 45) return("is-orange")
+      if (p >  0) return("is-red")
+      "is-gray"
+    }
+    
+    tagList(
+      lapply(seq_len(nrow(d)), function(i){
+        job <- d[i]
+        
+        score <- job$.mp_score
+        badge_txt <- if (is.finite(score)) paste0(round(score), "% Match") else "Match —"
+        badge_cls <- badge_cls_from_score(score)
+        
+        is_fav <- as.numeric(job$id) %in% rv$favorites
+        
+        title <- pick_col(job, c("Job_Title","Title"))
+        comp  <- pick_col(job, c("Company","Company_Name"))
+        loc   <- pick_col(job, c("Location","City","Region"))
+        cp_raw <- pick_col(job, c("Code_Postal","CP","Postal_Code"))
+        cp_fmt <- format_postal_code(cp_raw)
+        loc_txt <- paste0(loc, if (nzchar(cp_fmt)) paste0(" (", cp_fmt, ")") else "")
+        
+        ct    <- pick_col(job, c("Contract_Type","Contract"))
+        ago   <- if (has_col(job, "Publish_Date")) posted_ago_txt(job$Publish_Date) else ""
+        sources <- get_offer_sources(job)
+        
+        pay <- format_pay(job)
+        pay_txt <- if (nzchar(pay$txt)) paste0(pay$txt, " € / ", pay$unit) else ""
+        
+        hs_lbl <- head(get_hard_lbl(job, n = 3), 3)
+        
+        div(class = "offer-card",
+            onclick = sprintf("Shiny.setInputValue('open_offer', %d, {priority:'event'})",
+                              as.numeric(job$id)
+            ),
+            div(class = "offer-head",
+                div(class = "offer-left",
+                    tags$h3(class = "offer-title", title),
+                    div(class = "offer-sub",
+                        tags$p(class = "offer-company", comp),
+                        tags$p(class = "offer-location", loc_txt)
+                    ),
+                    div(class="pills",
+                        if (nzchar(ct)) span(class = pill_cls(FALSE), ct),
+                        if (has_col(job,"Is_Remote") && is_remote_true(job$Is_Remote)) {
+                          span(class = pill_cls(FALSE), "Télétravail possible")
+                        },
+                        if (nzchar(pay_txt)) span(class = pill_cls(FALSE), pay_txt)
+                    ),
+                    if (length(hs_lbl) > 0) div(class="offer-line",
+                                                span(class="offer-label", "Stack :"),
+                                                div(class="pills",
+                                                    lapply(hs_lbl, function(x) span(class = pill_cls(FALSE), x))
+                                                )
+                    )
+                ),
+                div(class="offer-right",
+                    tags$button(
+                      class = paste("fav-btn", if (is_fav) "is-on" else ""),
+                      onclick = sprintf(
+                        "event.stopPropagation(); Shiny.setInputValue('toggle_fav', %d, {priority:'event'})",
+                        as.numeric(job$id)
+                      ),
+                      tags$i(class = if (is_fav) "fas fa-heart" else "far fa-heart")
+                    ),
+                    div(class=paste("match-badge", badge_cls), badge_txt),
+                    if (nzchar(ago)) div(class="offer-time", ago),
+                    div(class = "offer-sources-bottom",
+                        render_source_logos(sources)
+                    )
+                )
+            )
+        )
+      })
+    )
+  })
+  
+  #############################################################################.
   # ONGLET 4 : FAVORIS & COMPARATEUR ###########################################
   #############################################################################.
   FAV_PER_PAGE <- 5

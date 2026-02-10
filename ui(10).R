@@ -659,7 +659,7 @@ navbarPage(
                                         )
                                     )
                                 ),
-                                uiOutput("mp_list")
+                                uiOutput("mp_top3")
                             )
                      )
                    )
