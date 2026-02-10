@@ -3334,14 +3334,14 @@ server <- function(input, output, session) {
   })
   
   output$mp_count <- renderText({
-    if (is.null(rv$mp_run_ok) || rv$mp_run_ok <= 0) return("")
+    if (is.null(rv$mp_run_ok) || !is.finite(rv$mp_run_ok) || rv$mp_run_ok <= 0) return("")
     d <- mp_top3_jobs()
     n <- if (is.null(d)) 0 else nrow(d)
     paste0(n, " recommandation", ifelse(n > 1, "s", ""))
   })
   
   output$mp_top3 <- renderUI({
-    if (is.null(rv$mp_run_ok) || rv$mp_run_ok <= 0) {
+    if (is.null(rv$mp_run_ok) || !is.finite(rv$mp_run_ok) || rv$mp_run_ok <= 0) {
       return(div(class = "mp-reco-empty", "Lancez l’analyse pour afficher vos 3 meilleures recommandations."))
     }
     
@@ -3357,6 +3357,13 @@ server <- function(input, output, session) {
       if (p >= 45) return("is-orange")
       if (p >  0) return("is-red")
       "is-gray"
+    }
+    
+    # Petit helper "safe" pour éviter if(NA)
+    is_nz1 <- function(x){
+      if (is.null(x) || length(x) == 0) return(FALSE)
+      x <- as.character(x[1])
+      isTRUE(!is.na(x) && nzchar(trimws(x)))
     }
     
     tagList(
@@ -3381,7 +3388,7 @@ server <- function(input, output, session) {
         sources <- get_offer_sources(job)
         
         pay <- format_pay(job)
-        pay_txt <- if (nzchar(pay$txt)) paste0(pay$txt, " € / ", pay$unit) else ""
+        pay_txt <- if (is_nz1(pay$txt)) paste0(as.character(pay$txt), " € / ", as.character(pay$unit)) else ""
         
         hs_lbl <- head(get_hard_lbl(job, n = 3), 3)
         
@@ -3398,10 +3405,10 @@ server <- function(input, output, session) {
                     ),
                     div(class="pills",
                         if (nzchar(ct)) span(class = pill_cls(FALSE), ct),
-                        if (has_col(job,"Is_Remote") && is_remote_true(job$Is_Remote)) {
+                        if (has_col(job,"Is_Remote") && isTRUE(is_remote_true(job$Is_Remote))) {
                           span(class = pill_cls(FALSE), "Télétravail possible")
                         },
-                        if (nzchar(pay_txt)) span(class = pill_cls(FALSE), pay_txt)
+                        if (is_nz1(pay_txt)) span(class = pill_cls(FALSE), pay_txt)
                     ),
                     if (length(hs_lbl) > 0) div(class="offer-line",
                                                 span(class="offer-label", "Stack :"),
@@ -3420,7 +3427,7 @@ server <- function(input, output, session) {
                       tags$i(class = if (is_fav) "fas fa-heart" else "far fa-heart")
                     ),
                     div(class=paste("match-badge", badge_cls), badge_txt),
-                    if (nzchar(ago)) div(class="offer-time", ago),
+                    if (is_nz1(ago)) div(class="offer-time", ago),
                     div(class = "offer-sources-bottom",
                         render_source_logos(sources)
                     )
