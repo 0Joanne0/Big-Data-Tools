@@ -573,7 +573,7 @@ get_hourly_range <- function(df){
 is_freelance_row <- function(df){
   if (!("Contract_Type" %in% names(df))) return(rep(FALSE, nrow(df)))
   ct <- tolower(trimws(as.character(df$Contract_Type)))
-  ct == "freelance"
+  !is.na(ct) & ct == "freelance"
 }
 
 # Génère le texte "Min - Max" ou juste "Min".
