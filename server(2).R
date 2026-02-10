@@ -40,6 +40,11 @@ if (any(is.na(jobs_df$Category))) {
   stop("Secteurs sans catégorie dans le mapping :\n", paste(missing, collapse = "\n"))
 }
 
+# Si pas d'id dans la base, on en crée un (utile pour favoris, popups, etc.)
+if (!("id" %in% names(jobs_df))) {
+  jobs_df[, id := .I]
+}
+
 
 ###############################################################################.
 # HELPERS ----------------------------------------------------------------------
@@ -1156,6 +1161,210 @@ get_adv_lbl <- function(job_row, n = 3){
   lab
 }
 
+# ------------------------------------------------------------------------------
+# Dictionnaires externes (TXT) : hard skills / soft skills / benefits
+# Remplace les taxonomies "en dur" par des mappings chargés depuis fichiers.
+# ------------------------------------------------------------------------------
+resolve_dict_path <- function(candidates){
+  for (p in candidates) {
+    if (file.exists(p)) return(p)
+  }
+  NA_character_
+}
+
+read_norm_dict_txt <- function(path){
+  if (is.na(path) || !nzchar(path) || !file.exists(path)) {
+    stop("Dictionnaire introuvable: ", path)
+  }
+  
+  # Format attendu (par ligne) :  "alias": "canon",
+  lines <- readLines(path, warn = FALSE, encoding = "UTF-8")
+  lines <- trimws(lines)
+  lines <- lines[lines != ""]
+  lines <- lines[!grepl("^#", lines)]
+  
+  m <- stringr::str_match(lines, '^"([^"]+)"\\s*:\\s*"([^"]+)"')
+  keep <- !is.na(m[,2]) & !is.na(m[,3])
+  out <- data.table::data.table(alias = m[keep,2], canon = m[keep,3])
+  
+  out[, alias := trimws(as.character(alias))]
+  out[, canon := trimws(as.character(canon))]
+  out <- out[!is.na(alias) & nzchar(alias) & !is.na(canon) & nzchar(canon)]
+  out
+}
+
+# Chemins (tolérant aux variantes de nommage)
+HARD_DICT_PATH <- resolve_dict_path(c("hard_skills.txt","hardskills.txt","www/hard_skills.txt","www/hardskills.txt"))
+SOFT_DICT_PATH <- resolve_dict_path(c("soft_skills.txt","softskills.txt","www/soft_skills.txt","www/softskills.txt"))
+BENEFITS_DICT_PATH <- resolve_dict_path(c("benefit.txt","benefits.txt","www/benefit.txt","www/benefits.txt"))
+
+HARD_DICT <- read_norm_dict_txt(HARD_DICT_PATH)
+SOFT_DICT <- read_norm_dict_txt(SOFT_DICT_PATH)
+BENEFITS_DICT <- read_norm_dict_txt(BENEFITS_DICT_PATH)
+
+# --- Hard skills (canon + label + colonnes canon/label) ------------------------
+HARD_DICT[, alias_norm := normalize_skill(alias)]
+HARD_DICT[, canon_clean := stringr::str_squish(as.character(canon))]
+HARD_DICT <- HARD_DICT[!is.na(alias_norm) & nzchar(alias_norm) & !is.na(canon_clean) & nzchar(canon_clean)]
+HARD_DICT <- unique(HARD_DICT, by = "alias_norm")
+
+.hard_map <- setNames(HARD_DICT$canon_clean, HARD_DICT$alias_norm)
+
+map_to_canon <- function(x){
+  k <- normalize_skill(x)
+  if (k %in% names(.hard_map)) return(unname(.hard_map[k]))
+  k
+}
+
+canonize_vec <- function(v){
+  v <- v[!is.na(v) & nzchar(trimws(v))]
+  if (!length(v)) return(character(0))
+  unique(vapply(v, map_to_canon, character(1)))
+}
+
+labelize_vec <- function(v){
+  # Ici on affiche le canon tel quel (libellés pilotés par le fichier)
+  canonize_vec(v)
+}
+
+hard_canons <- sort(unique(unname(.hard_map)))
+hard_choices <- setNames(hard_canons, hard_canons)
+
+# Recalcule colonnes canon/label depuis le dictionnaire
+if (has_col(jobs_df, "Hard_Skills")) {
+  jobs_df[, Hard_Skills_Canon := vapply(Hard_Skills, function(x){
+    toks <- split_tokens(x)
+    can  <- canonize_vec(toks)
+    can  <- can[!is.na(can) & nzchar(can)]
+    paste(sort(unique(can)), collapse = ", ")
+  }, character(1))]
+  
+  jobs_df[, Hard_Skills_Label := vapply(Hard_Skills_Canon, function(x){
+    can <- split_tokens(x)
+    lab <- labelize_vec(can)
+    paste(sort(unique(lab)), collapse = ", ")
+  }, character(1))]
+}
+
+token_in_selected <- function(token, selected_terms){
+  if (is.null(selected_terms) || length(selected_terms) == 0) return(FALSE)
+  map_to_canon(token) %in% selected_terms
+}
+token_matches_any <- token_in_selected
+
+# --- Soft skills --------------------------------------------------------------
+SOFT_DICT[, alias_norm := norm_soft_key(alias)]
+SOFT_DICT[, canon_clean := stringr::str_squish(as.character(canon))]
+SOFT_DICT <- SOFT_DICT[!is.na(alias_norm) & nzchar(alias_norm) & !is.na(canon_clean) & nzchar(canon_clean)]
+SOFT_DICT <- unique(SOFT_DICT, by = "alias_norm")
+
+.soft_map <- setNames(SOFT_DICT$canon_clean, SOFT_DICT$alias_norm)
+
+map_soft_one <- function(tok){
+  if (is.null(tok) || !nzchar(tok)) return(NA_character_)
+  if (is_missing_txt(tok)) return(NA_character_)
+  k <- norm_soft_key(tok)
+  if (k %in% names(.soft_map)) return(unname(.soft_map[k]))
+  k
+}
+
+map_soft_vec <- function(tokens){
+  tokens <- tokens[!is.na(tokens) & nzchar(tokens)]
+  out <- vapply(tokens, map_soft_one, character(1))
+  out <- out[!is.na(out) & nzchar(out)]
+  unique(out)
+}
+
+labelize_soft_vec <- function(keys){
+  keys <- keys[!is.na(keys) & nzchar(keys)]
+  if (!length(keys)) return(character(0))
+  keys
+}
+
+if (has_col(jobs_df, "Soft_Skills")) {
+  jobs_df[, Soft_Skills_Canon := vapply(Soft_Skills, function(x){
+    toks <- split_tokens(x)
+    can  <- map_soft_vec(toks)
+    paste(sort(unique(can)), collapse = ", ")
+  }, character(1))]
+}
+
+build_soft_choices <- function(df){
+  if (!has_col(df, "Soft_Skills")) return(setNames(character(0), character(0)))
+  
+  all_tok <- split_tokens(df$Soft_Skills)
+  all_tok <- all_tok[!is_missing_txt(all_tok)]
+  
+  soft_can <- unique(c(unname(.soft_map), map_soft_vec(all_tok)))
+  soft_can <- soft_can[!is.na(soft_can) & nzchar(soft_can)]
+  soft_can <- sort(unique(soft_can))
+  
+  setNames(soft_can, soft_can)
+}
+
+# --- Benefits / Advantages ----------------------------------------------------
+BENEFITS_DICT[, alias_norm := norm_adv_key(alias)]
+BENEFITS_DICT[, canon_clean := stringr::str_squish(as.character(canon))]
+BENEFITS_DICT <- BENEFITS_DICT[!is.na(alias_norm) & nzchar(alias_norm) & !is.na(canon_clean) & nzchar(canon_clean)]
+BENEFITS_DICT <- unique(BENEFITS_DICT, by = "alias_norm")
+
+.benefit_map <- setNames(BENEFITS_DICT$canon_clean, BENEFITS_DICT$alias_norm)
+
+map_adv_one <- function(tok){
+  if (is.null(tok) || !nzchar(tok)) return(NA_character_)
+  if (is_missing_txt(tok)) return(NA_character_)
+  k <- norm_adv_key(tok)
+  if (k %in% names(.benefit_map)) return(unname(.benefit_map[k]))
+  k
+}
+
+map_adv_vec <- function(tokens){
+  tokens <- tokens[!is.na(tokens) & nzchar(tokens)]
+  out <- vapply(tokens, map_adv_one, character(1))
+  out <- out[!is.na(out) & nzchar(out)]
+  unique(out)
+}
+
+labelize_adv_vec <- function(keys){
+  keys <- keys[!is.na(keys) & nzchar(keys)]
+  if (!length(keys)) return(character(0))
+  keys
+}
+
+adv_col <- get_adv_col(jobs_df)
+if (!is.na(adv_col)) {
+  jobs_df[, Advantages_Canon := vapply(.SD[[1]], function(x){
+    toks <- split_tokens(x)
+    can  <- map_adv_vec(toks)
+    paste(sort(unique(can)), collapse = ", ")
+  }, character(1)), .SDcols = adv_col]
+  
+  jobs_df[, Advantages_Label := vapply(Advantages_Canon, function(x){
+    can <- split_tokens(x)
+    lab <- labelize_adv_vec(can)
+    paste(sort(unique(lab)), collapse = ", ")
+  }, character(1))]
+}
+
+build_adv_choices <- function(df){
+  adv_col <- get_adv_col(df)
+  if (is.na(adv_col)) return(setNames(character(0), character(0)))
+  
+  all_tok <- split_tokens(df[[adv_col]])
+  all_tok <- all_tok[!is_missing_txt(all_tok)]
+  
+  adv_can <- unique(c(unname(.benefit_map), map_adv_vec(all_tok)))
+  adv_can <- adv_can[!is.na(adv_can) & nzchar(adv_can)]
+  adv_can <- sort(unique(adv_can))
+  
+  setNames(adv_can, adv_can)
+}
+
+token_in_selected_adv <- function(token, selected_terms){
+  if (is.null(selected_terms) || length(selected_terms) == 0) return(FALSE)
+  map_adv_one(token) %in% selected_terms
+}
+
 # Choix finaux
 SOFT_CHOICES <- build_soft_choices(jobs_df)
 ADV_CHOICES  <- build_adv_choices(jobs_df)
@@ -1687,9 +1896,9 @@ server <- function(input, output, session) {
     
     applied$exp_sector           <- input$exp_sector
     applied$exp_company_category <- input$exp_company_category
-    applied$exp_hard_skills <- canonize_vec(input$exp_hard_skills)
-    applied$exp_soft_skills      <- input$exp_soft_skills
-    applied$exp_advantages       <- input$exp_advantages
+    applied$exp_hard_skills      <- canonize_vec(input$exp_hard_skills)
+    applied$exp_soft_skills      <- map_soft_vec(input$exp_soft_skills)
+    applied$exp_advantages       <- map_adv_vec(input$exp_advantages)
     applied$exp_date             <- input$exp_date
     
     src <- c()
@@ -2793,9 +3002,9 @@ server <- function(input, output, session) {
     
     applied_mp$mp_sector           <- input$mp_sector
     applied_mp$mp_company_category <- input$mp_company_category
-    applied_mp$mp_hard_skills <- canonize_vec(input$mp_hard_skills)
-    applied_mp$mp_soft_skills      <- input$mp_soft_skills
-    applied_mp$mp_advantages       <- input$mp_advantages
+    applied_mp$mp_hard_skills      <- canonize_vec(input$mp_hard_skills)
+    applied_mp$mp_soft_skills      <- map_soft_vec(input$mp_soft_skills)
+    applied_mp$mp_advantages       <- map_adv_vec(input$mp_advantages)
     applied_mp$mp_date             <- input$mp_date
     
     src <- c()
@@ -2805,8 +3014,10 @@ server <- function(input, output, session) {
     applied_mp$mp_source <- src
     
     # Parse CV (on est sûr que cv_path existe ici)
-    vocab <- sort(unique(split_tokens(jobs_df$Hard_Skills)))
-    rv$mp_cv_terms <- extract_skills_from_cv(cv_path, vocab)
+    # On détecte dans le CV à partir des alias du dictionnaire, puis on canonise.
+    vocab_alias <- unique(HARD_DICT$alias)
+    found_alias <- extract_skills_from_cv(cv_path, vocab_alias)
+    rv$mp_cv_terms <- canonize_vec(found_alias)
     
     rv$mp_run_ok <- input$mp_run
     
@@ -2815,6 +3026,41 @@ server <- function(input, output, session) {
       session$sendCustomMessage("mpLoading", FALSE)
     }, once = TRUE)
     
+  }, ignoreInit = TRUE)
+
+  ## mp_apply_filters : met à jour les filtres sans relancer l'analyse CV -------
+  observeEvent(input$mp_apply_filters, {
+    tt <- input$mp_title; if (is.null(tt)) tt <- ""
+    ll <- input$mp_loc;   if (is.null(ll)) ll <- ""
+    
+    applied_mp$mp_title <- trimws(as.character(tt))
+    applied_mp$mp_loc   <- trimws(as.character(ll))
+    
+    applied_mp$mp_contract       <- input$mp_contract
+    applied_mp$mp_duration_only  <- isTRUE(input$mp_duration_only)
+    applied_mp$mp_duration_range <- input$mp_duration_range
+    
+    applied_mp$mp_experience_level <- input$mp_experience_level
+    
+    applied_mp$mp_salary_only  <- isTRUE(input$mp_salary_only)
+    applied_mp$mp_salary_range <- input$mp_salary_range
+    
+    applied_mp$mp_remote <- isTRUE(input$mp_remote)
+    
+    applied_mp$mp_sector           <- input$mp_sector
+    applied_mp$mp_company_category <- input$mp_company_category
+    applied_mp$mp_hard_skills      <- canonize_vec(input$mp_hard_skills)
+    applied_mp$mp_soft_skills      <- map_soft_vec(input$mp_soft_skills)
+    applied_mp$mp_advantages       <- map_adv_vec(input$mp_advantages)
+    applied_mp$mp_date             <- input$mp_date
+    
+    src <- c()
+    if (isTRUE(input$mp_source_li))   src <- c(src, "LinkedIn")
+    if (isTRUE(input$mp_source_in))   src <- c(src, "Indeed")
+    if (isTRUE(input$mp_source_wttj)) src <- c(src, "Welcome to the Jungle")
+    applied_mp$mp_source <- src
+    
+    rv$mp_page <- 1
   }, ignoreInit = TRUE)
   
   ## Filtrage Match (copie Explorateur, version Match) -------------------------
@@ -3021,6 +3267,238 @@ server <- function(input, output, session) {
     # Par défaut : si "relevance", on ne force pas de tri ici
     data[, .idx := NULL]
     data
+  })
+  
+  ## Recommandations (Top 3) ---------------------------------------------------
+  mp_user_skills_can <- reactive({
+    req(rv$mp_run_ok > 0)
+    u <- unique(c(applied_mp$mp_hard_skills, rv$mp_cv_terms))
+    u <- u[!is.na(u) & nzchar(trimws(as.character(u)))]
+    canonize_vec(u)
+  })
+  
+  mp_scored_jobs <- reactive({
+    req(rv$mp_run_ok > 0)
+    
+    data <- data.table::copy(mp_filtered_jobs())
+    if (is.null(data) || nrow(data) == 0) return(data)
+    
+    user_can <- mp_user_skills_can()
+    
+    # Skills offre : on privilégie la colonne canon si elle existe
+    skill_col <- if ("Hard_Skills_Canon" %in% names(data)) "Hard_Skills_Canon" else if ("Hard_Skills" %in% names(data)) "Hard_Skills" else NA_character_
+    if (is.na(skill_col)) {
+      data[, .mp_match := NA_real_]
+      return(data)
+    }
+    
+    toks <- lapply(as.character(data[[skill_col]]), function(x){
+      can <- split_tokens(x)
+      if (skill_col != "Hard_Skills_Canon") can <- canonize_vec(can)
+      can <- can[!is.na(can) & nzchar(can)]
+      unique(can)
+    })
+    
+    total <- vapply(toks, length, integer(1))
+    hit   <- if (length(user_can) > 0) {
+      vapply(toks, function(v) sum(v %in% user_can), integer(1))
+    } else {
+      rep(0L, length(toks))
+    }
+    
+    data[, .mp_total := total]
+    data[, .mp_hit   := hit]
+    data[, .mp_match := ifelse(.mp_total > 0, 100 * .mp_hit / .mp_total, NA_real_)]
+    
+    data
+  })
+  
+  mp_top3 <- reactive({
+    req(rv$mp_run_ok > 0)
+    d <- mp_scored_jobs()
+    if (is.null(d) || nrow(d) == 0) return(d)
+    
+    d <- data.table::copy(d)
+    d[, .idx := .I]
+    
+    # Tri : Match desc ; si NA partout, fallback sur date desc
+    all_na <- all(!is.finite(d$.mp_match))
+    if (!all_na) {
+      d <- d[order(-.mp_match, .idx)]
+    } else if ("Publish_Date" %in% names(d)) {
+      d <- d[order(is.na(Publish_Date), -as.numeric(Publish_Date), .idx)]
+    }
+    
+    d[, .idx := NULL]
+    head(d, 3)
+  })
+  
+  mp_match_badge_class <- function(p){
+    if (!is.finite(p)) return("is-gray")
+    if (p >= 70) return("is-green")
+    if (p >= 45) return("is-orange")
+    "is-red"
+  }
+  
+  output$mp_count <- renderText({
+    req(rv$mp_run_ok > 0)
+    n <- nrow(mp_filtered_jobs())
+    if (!is.finite(n) || n < 0) n <- 0
+    if (n == 0) return("0 offre")
+    paste0(n, " offre", ifelse(n > 1, "s", ""))
+  })
+  
+  output$mp_results_list <- renderUI({
+    req(rv$mp_run_ok > 0)
+    
+    d_all <- mp_filtered_jobs()
+    if (is.null(d_all) || nrow(d_all) == 0) return(h4("Aucun résultat."))
+    
+    d <- mp_top3()
+    if (is.null(d) || nrow(d) == 0) return(h4("Aucune recommandation."))
+    
+    tagList(
+      tags$div(class="mp-top3-note",
+               paste0("Top 3 recommandations (sur ", nrow(d_all), " offre", ifelse(nrow(d_all) > 1, "s", ""), ")")
+      ),
+      lapply(seq_len(nrow(d)), function(i){
+        job <- d[i]
+        
+        title <- pick_col(job, c("Job_Title","Title"))
+        comp  <- pick_col(job, c("Company","Company_Name"))
+        loc   <- pick_col(job, c("Location","City","Region"))
+        cp_raw <- pick_col(job, c("Code_Postal","CP","Postal_Code"))
+        cp_fmt <- format_postal_code(cp_raw)
+        loc_txt <- paste0(loc, if (nzchar(cp_fmt)) paste0(" (", cp_fmt, ")") else "")
+        
+        ct    <- pick_col(job, c("Contract_Type","Contract"))
+        ago   <- if (has_col(job, "Publish_Date")) posted_ago_txt(job$Publish_Date) else ""
+        sources <- get_offer_sources(job)
+        
+        pay <- format_pay(job)
+        pay_txt <- if (nzchar(pay$txt)) paste0(pay$txt, " € / ", pay$unit) else ""
+        
+        # Skills (rapide)
+        if (has_col(job, "Hard_Skills_Canon") && has_col(job, "Hard_Skills_Label")) {
+          hs_can <- head(split_tokens(job$Hard_Skills_Canon), 3)
+          hs_lbl <- head(split_tokens(job$Hard_Skills_Label), 3)
+        } else {
+          hs_can <- head(get_hard_can(job), 3)
+          hs_lbl <- labelize_vec(hs_can)
+        }
+        
+        is_fav <- as.numeric(job$id) %in% rv$favorites
+        
+        mp <- suppressWarnings(as.numeric(job$.mp_match))
+        badge_txt <- if (is.finite(mp)) paste0(round(mp), "% Match") else "Match —"
+        badge_cls <- mp_match_badge_class(mp)
+        
+        div(
+          class = "offer-card js-offer-card",
+          onclick = sprintf(
+            "Shiny.setInputValue('open_offer', %d, {priority:'event'})",
+            as.numeric(job$id)
+          ),
+          div(class="offer-head",
+              div(class="offer-left",
+                  tags$h3(class="offer-title", title),
+                  div(class="offer-sub",
+                      tags$p(class="offer-company", comp),
+                      tags$p(class="offer-location", loc_txt)
+                  ),
+                  
+                  div(class="pills",
+                      if (nzchar(ct)) span(class = "pill gray", ct),
+                      if (has_col(job,"Is_Remote") && is_remote_true(job$Is_Remote)) {
+                        span(class = "pill gray", "Télétravail possible")
+                      },
+                      if (nzchar(pay_txt)) span(class = "pill gray", pay_txt)
+                  ),
+                  
+                  if (length(hs_can) > 0) div(class="offer-line",
+                                              span(class="offer-label", "Stack :"),
+                                              div(class="pills",
+                                                  lapply(seq_along(hs_can), function(j){
+                                                    span(class = "pill gray", hs_lbl[j])
+                                                  })
+                                              )
+                  )
+              ),
+              
+              div(class="offer-right",
+                  tags$button(
+                    class = paste("fav-btn", if (is_fav) "is-on" else ""),
+                    onclick = sprintf(
+                      "event.stopPropagation(); Shiny.setInputValue('toggle_fav', %d, {priority:'event'})",
+                      as.numeric(job$id)
+                    ),
+                    tags$i(class = if (is_fav) "fas fa-heart" else "far fa-heart")
+                  ),
+                  
+                  div(class=paste("match-badge", badge_cls), badge_txt),
+                  if (nzchar(ago)) div(class="offer-time", ago),
+                  div(class = "offer-sources-bottom",
+                      render_source_logos(sources)
+                  )
+              )
+          )
+        )
+      })
+    )
+  })
+  
+  # Carte (Top 3)
+  mp_map_data <- reactive({
+    req(rv$mp_run_ok > 0)
+    d <- mp_top3()
+    if (is.null(d) || nrow(d) == 0) return(d)
+    if (!has_col(d, "Latitude") || !has_col(d, "Longitude")) return(d[0])
+    d[is.finite(Latitude) & is.finite(Longitude)]
+  })
+  
+  output$mp_map <- leaflet::renderLeaflet({
+    req(rv$mp_run_ok > 0)
+    
+    d <- mp_map_data()
+    m <- leaflet::leaflet() %>%
+      leaflet::addProviderTiles(leaflet::providers$OpenStreetMap) %>%
+      leaflet::setView(lng = 2.2137, lat = 46.2276, zoom = 5)
+    
+    if (!is.null(d) && nrow(d) > 0) {
+      title <- if (has_col(d, "Job_Title")) as.character(d$Job_Title) else ""
+      comp  <- if (has_col(d, "Company"))   as.character(d$Company)   else ""
+      loc   <- if (has_col(d, "Location"))  as.character(d$Location)  else ""
+      
+      popup <- mapply(function(id, t, c, l){
+        t <- ifelse(is.na(t), "", t)
+        c <- ifelse(is.na(c), "", c)
+        l <- ifelse(is.na(l), "", l)
+        paste0(
+          "<div class='map-popup' ",
+          "onclick=\"Shiny.setInputValue('open_offer', ", id, ", {priority:'event'})\">",
+          "<b>", htmltools::htmlEscape(t), "</b><br>",
+          htmltools::htmlEscape(c), "<br>",
+          htmltools::htmlEscape(l),
+          "</div>"
+        )
+      }, d$id, title, comp, loc, SIMPLIFY = TRUE, USE.NAMES = FALSE)
+      
+      label_vec <- if (has_col(d, "Job_Title")) as.character(d$Job_Title) else NULL
+      
+      m <- m %>% leaflet::addCircleMarkers(
+        data = d,
+        lng = ~Longitude, lat = ~Latitude,
+        radius = 7,
+        stroke = TRUE, weight = 1,
+        fillOpacity = 0.85,
+        popup = popup,
+        label = label_vec,
+        group = "mp_jobs_pts",
+        popupOptions = leaflet::popupOptions(className = "job-popup")
+      )
+    }
+    
+    m
   })
   
   ## Graphique -----------------------------------------------------------------

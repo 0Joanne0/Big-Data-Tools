@@ -763,6 +763,7 @@ navbarPage(
                                             selectInput("mp_sort",
                                                         label = NULL,
                                                         choices = c("Trier" = "relevance",
+                                                                    "Match" = "match",
                                                                     "Date : ordre décroissant" = "date_desc",
                                                                     "Date : ordre croissant" = "date_asc",
                                                                     "Salaire : ordre décroissant" = "salary_desc",
