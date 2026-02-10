@@ -19,7 +19,60 @@ library(readxl)
 library(leaflet)
 
 # Chargement des données
-jobs_df <- data.table::fread("www/data_jobs.csv")
+# En local, le CSV peut être à la racine; en prod, souvent dans `www/`
+data_path <- if (file.exists("www/data_jobs.csv")) "www/data_jobs.csv" else "data_jobs.csv"
+
+# Validation externe (Node) de `Publish_Date` ----------------------------------
+# Si `node` est disponible, on exécute `validate_publish_date.js` pour vérifier
+# que le CSV est cohérent (notamment champs multi-lignes + dates futures).
+run_publish_date_validation <- function(csv_path) {
+  if (!file.exists(csv_path)) return(invisible(FALSE))
+  if (!file.exists("validate_publish_date.js")) return(invisible(FALSE))
+  node_bin <- Sys.which("node")
+  if (!nzchar(node_bin)) return(invisible(FALSE))
+  
+  res <- tryCatch({
+    out <- suppressWarnings(system2(
+      node_bin,
+      args = c("validate_publish_date.js", csv_path),
+      stdout = TRUE, stderr = TRUE
+    ))
+    status <- attr(out, "status") %||% 0L
+    list(status = as.integer(status), output = out)
+  }, error = function(e) {
+    list(status = 2L, output = paste("Validation error:", conditionMessage(e)))
+  })
+  
+  if (isTRUE(res$status != 0L)) {
+    warning(
+      "validate_publish_date.js a détecté un problème dans `Publish_Date`.\n",
+      paste(res$output, collapse = "\n")
+    )
+    return(invisible(FALSE))
+  }
+  
+  invisible(TRUE)
+}
+run_publish_date_validation(data_path)
+
+# Lecture du CSV (explicite) ---------------------------------------------------
+# Important : `fill=TRUE` + `quote='\"'` pour gérer les descriptions multi-lignes
+# et ne pas décaler les colonnes (ce qui fausse `Publish_Date`).
+jobs_df <- data.table::fread(
+  data_path,
+  sep = ";",
+  quote = "\"",
+  fill = TRUE,
+  encoding = "UTF-8"
+)
+
+###############################################################################.
+# TIMEZONE ---------------------------------------------------------------------
+###############################################################################.
+# Pour éviter les décalages “aujourd’hui” vs “hier” selon la machine qui héberge,
+# on fixe un fuseau de référence (modifiable via variable d'env).
+APP_TZ <- Sys.getenv("APP_TZ", "Europe/Paris")
+today_date <- function() as.Date(Sys.time(), tz = APP_TZ)
 
 ###############################################################################.
 # HELPERS ----------------------------------------------------------------------
@@ -141,6 +194,20 @@ if (has_col(jobs_df, "Publish_Date")) {
   jobs_df[, Publish_Date := parse_publish_date(Publish_Date)]
 }
 
+# Sécurise les dates incohérentes : si une date de publication est dans le futur,
+# on la considère invalide (NA) pour ne jamais afficher “aujourd’hui” à tort.
+sanitize_publish_date <- function(d) {
+  d <- as.Date(d)
+  if (!length(d)) return(d)
+  today <- today_date()
+  bad <- !is.na(d) & d > today
+  if (any(bad)) d[bad] <- as.Date(NA)
+  d
+}
+if (has_col(jobs_df, "Publish_Date")) {
+  jobs_df[, Publish_Date := sanitize_publish_date(Publish_Date)]
+}
+
 # Split en tokens (skills, avantages, ...)
 split_tokens <- function(x) {
   x <- as.character(x)
@@ -179,9 +246,12 @@ posted_ago_txt <- function(publish_date) {
   if (is.null(publish_date) || length(publish_date) == 0) return("")
   publish_date <- as.Date(publish_date[1])
   if (is.na(publish_date)) return("")
-  d <- as.integer(Sys.Date() - publish_date)
+  d <- as.integer(today_date() - publish_date)
   if (!is.finite(d)) return("")
-  if (d <= 0) return("aujourd’hui")
+  # Défensif : si la date est future (incohérente), on n'affiche rien
+  # (sinon on risque “aujourd’hui” à tort).
+  if (d < 0) return("")
+  if (d == 0) return("aujourd’hui")
   if (d == 1) return("il y a 1 jour")
   paste0("il y a ", d, " jours")
 }
@@ -960,8 +1030,8 @@ server <- function(input, output, session) {
                           NA_integer_
       )
       if (!is.na(keep_days)) {
-        cutoff <- Sys.Date() - keep_days
-        data <- data[!is.na(Publish_Date) & Publish_Date >= cutoff, ]
+        cutoff <- today_date() - keep_days
+        data <- data[!is.na(Publish_Date) & Publish_Date >= cutoff & Publish_Date <= today_date(), ]
       }
     }
     
@@ -2024,8 +2094,8 @@ server <- function(input, output, session) {
                           NA_integer_
       )
       if (!is.na(keep_days)) {
-        cutoff <- Sys.Date() - keep_days
-        data <- data[!is.na(Publish_Date) & Publish_Date >= cutoff, ]
+        cutoff <- today_date() - keep_days
+        data <- data[!is.na(Publish_Date) & Publish_Date >= cutoff & Publish_Date <= today_date(), ]
       }
     }
     
