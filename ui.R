@@ -21,7 +21,9 @@ library(readxl)
 library(leaflet) 
 
 # Chargement des données
-jobs_df <-  data.table::fread("www/data_jobs.csv")
+# (robuste) : certains environnements n'ont pas de dossier `www/`
+jobs_path <- if (file.exists("www/data_jobs.csv")) "www/data_jobs.csv" else "data_jobs.csv"
+jobs_df <- data.table::fread(jobs_path)
 
 col_hard <- "Hard_Skills"
 col_soft <- "Soft_Skills"
@@ -115,8 +117,17 @@ navbarPage(
     tags$link(href = "https://unpkg.com/@fontsource/open-sauce-one@latest/index.css",
               rel  = "stylesheet"),
     # CSS et JS du projet
-    tags$link(rel = "stylesheet", type = "text/css", href = "style.css"),
-    tags$script(src = "script.js")
+    # (robuste) : si pas de dossier `www/`, on injecte les fichiers locaux en inline
+    if (file.exists("style.css")) {
+      tags$style(HTML(paste(readLines("style.css", warn = FALSE), collapse = "\n")))
+    } else {
+      tags$link(rel = "stylesheet", type = "text/css", href = "style.css")
+    },
+    if (file.exists("script.js")) {
+      tags$script(HTML(paste(readLines("script.js", warn = FALSE), collapse = "\n")))
+    } else {
+      tags$script(src = "script.js")
+    }
   ),
   footer = app_footer(),
   
