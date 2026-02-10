@@ -3152,6 +3152,132 @@ server <- function(input, output, session) {
     )
   })
   
+  #############################################################################.
+  # TOP 3 RECOMMANDATIONS (Match Parfait) ######################################
+  #############################################################################.
+  # Score simple basé sur la couverture des hard skills de l'offre
+  compute_match_pct_offer <- function(job_row, user_skills){
+    u <- unique(norm_skill(user_skills))
+    u <- u[!is.na(u) & nzchar(u)]
+    
+    hard_raw <- pick_col(job_row, c("Hard_Skills_Canon", "Hard_Skills"))
+    js <- unique(norm_skill(split_tokens(hard_raw, sep = ",")))
+    js <- js[!is.na(js) & nzchar(js)]
+    
+    if (length(js) == 0 || length(u) == 0) {
+      return(list(pct = 0, hits = 0, total = length(js)))
+    }
+    
+    hits <- length(intersect(js, u))
+    pct  <- round(100 * hits / length(js))
+    pct  <- max(0, min(100, pct))
+    list(pct = pct, hits = hits, total = length(js))
+  }
+  
+  mp_ranked_jobs <- reactive({
+    req(rv$mp_run_ok > 0)
+    
+    d <- mp_sorted_jobs()
+    if (is.null(d) || nrow(d) == 0) return(d)
+    
+    user_skills <- unique(c(applied_mp$mp_hard_skills, rv$mp_cv_terms))
+    user_skills <- user_skills[!is.na(user_skills) & nzchar(user_skills)]
+    
+    dd <- data.table::copy(d)
+    
+    # calc score sur chaque ligne (robuste même si Hard_Skills vide)
+    sc <- lapply(seq_len(nrow(dd)), function(i) compute_match_pct_offer(dd[i], user_skills))
+    dd[, mp_match_pct := vapply(sc, `[[`, numeric(1), "pct")]
+    dd[, mp_match_hits := vapply(sc, `[[`, integer(1), "hits")]
+    dd[, mp_match_total := vapply(sc, `[[`, integer(1), "total")]
+    
+    # tri décroissant sur score, puis sur date si dispo (plus récent)
+    dd[, .idx := .I]
+    if (has_col(dd, "Publish_Date")) {
+      dd <- dd[order(-mp_match_pct, is.na(Publish_Date), -as.numeric(Publish_Date), .idx)]
+    } else {
+      dd <- dd[order(-mp_match_pct, .idx)]
+    }
+    dd[, .idx := NULL]
+    
+    dd
+  })
+  
+  mp_top3_jobs <- reactive({
+    d <- mp_ranked_jobs()
+    if (is.null(d) || nrow(d) == 0) return(d)
+    head(d, 3)
+  })
+  
+  output$mp_count <- renderText({
+    req(rv$mp_run_ok > 0)
+    d <- mp_ranked_jobs()
+    n <- if (is.null(d)) 0 else nrow(d)
+    paste0(n, " offre", ifelse(n > 1, "s", ""), " analysée", ifelse(n > 1, "s", ""), " • Top 3 recommandations")
+  })
+  
+  output$mp_results_list <- renderUI({
+    req(rv$mp_run_ok > 0)
+    
+    d <- mp_top3_jobs()
+    if (is.null(d) || nrow(d) == 0) return(h4("Aucune recommandation pour le moment."))
+    
+    tagList(
+      lapply(seq_len(nrow(d)), function(i){
+        job <- d[i]
+        
+        title <- pick_col(job, c("Job_Title","Title"))
+        comp  <- pick_col(job, c("Company","Company_Name"))
+        loc   <- pick_col(job, c("Location","City","Region"))
+        cp_raw <- pick_col(job, c("Code_Postal","CP","Postal_Code"))
+        cp_fmt <- format_postal_code(cp_raw)
+        loc_txt <- paste0(loc, if (nzchar(cp_fmt)) paste0(" (", cp_fmt, ")") else "")
+        
+        ct    <- pick_col(job, c("Contract_Type","Contract"))
+        ago   <- if (has_col(job, "Publish_Date")) posted_ago_txt(job$Publish_Date) else ""
+        sources <- get_offer_sources(job)
+        
+        pay <- format_pay(job)
+        pay_txt <- if (nzchar(pay$txt)) paste0(pay$txt, " € / ", pay$unit) else ""
+        
+        # match badge
+        mp <- suppressWarnings(as.numeric(job$mp_match_pct))
+        badge_txt <- if (is.finite(mp)) paste0(round(mp), "% Match") else "Match —"
+        badge_cls <- match_badge_class(mp)
+        
+        div(
+          class = "offer-card js-offer-card",
+          onclick = sprintf(
+            "Shiny.setInputValue('open_offer', %d, {priority:'event'})",
+            as.numeric(job$id)
+          ),
+          div(class="offer-head",
+              div(class="offer-left",
+                  tags$h3(class="offer-title", title),
+                  div(class="offer-sub",
+                      tags$p(class="offer-company", comp),
+                      tags$p(class="offer-location", loc_txt)
+                  ),
+                  
+                  div(class="pills",
+                      if (nzchar(ct)) span(class = "pill gray", ct),
+                      if (has_col(job,"Is_Remote") && is_remote_true(job$Is_Remote)) span(class = "pill gray", "Télétravail possible"),
+                      if (nzchar(pay_txt)) span(class = "pill gray", pay_txt)
+                  )
+              ),
+              div(class="offer-right",
+                  div(class=paste("match-badge", badge_cls), badge_txt),
+                  if (nzchar(ago)) div(class="offer-time", ago),
+                  div(class = "offer-sources-bottom",
+                      render_source_logos(sources)
+                  )
+              )
+          )
+        )
+      })
+    )
+  })
+  
   
   #############################################################################.
   # ONGLET 4 : FAVORIS & COMPARATEUR ###########################################
