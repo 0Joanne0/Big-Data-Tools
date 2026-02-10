@@ -3407,65 +3407,68 @@ server <- function(input, output, session) {
     user_soft_base <- if (cv_empty) sel_soft_key else cv_soft_key
     
     # Fréquence = dans combien d'offres le skill apparaît (selon offres filtrées)
-    freq_hard <- data.table::data.table()
-    if (!is.null(offers_used) && nrow(offers_used) > 0) {
-      hard_toks <- lapply(seq_len(nrow(offers_used)), function(i){
-        unique(get_hard_can(offers_used[i]))
-      })
-      freq_hard <- data.table::data.table(
-        offer_id = rep(offers_used$id, lengths(hard_toks)),
-        key      = unlist(hard_toks, use.names = FALSE)
-      )
-      freq_hard <- freq_hard[!is.na(key) & nzchar(key)]
-      freq_hard <- unique(freq_hard, by = c("offer_id","key"))[, .N, by = key][order(-N)]
-    }
+    # (base R pour éviter les pièges data.table dans l'app)
+    freq_all <- data.frame(type = character(0), key = character(0), N = numeric(0), stringsAsFactors = FALSE)
     
-    freq_soft <- data.table::data.table()
     if (!is.null(offers_used) && nrow(offers_used) > 0) {
-      soft_toks <- lapply(seq_len(nrow(offers_used)), function(i){
-        unique(get_soft_can(offers_used[i]))
-      })
-      freq_soft <- data.table::data.table(
-        offer_id = rep(offers_used$id, lengths(soft_toks)),
-        key      = unlist(soft_toks, use.names = FALSE)
-      )
-      freq_soft <- freq_soft[!is.na(key) & nzchar(key)]
-      freq_soft <- unique(freq_soft, by = c("offer_id","key"))[, .N, by = key][order(-N)]
+      offer_ids <- offers_used$id
+      
+      hard_pairs <- do.call(rbind, lapply(seq_len(nrow(offers_used)), function(i){
+        keys <- unique(get_hard_can(offers_used[i]))
+        keys <- keys[!is.na(keys) & nzchar(keys)]
+        if (!length(keys)) return(NULL)
+        data.frame(offer_id = offer_ids[i], key = keys, stringsAsFactors = FALSE)
+      }))
+      
+      soft_pairs <- do.call(rbind, lapply(seq_len(nrow(offers_used)), function(i){
+        keys <- unique(get_soft_can(offers_used[i]))
+        keys <- keys[!is.na(keys) & nzchar(keys)]
+        if (!length(keys)) return(NULL)
+        data.frame(offer_id = offer_ids[i], key = keys, stringsAsFactors = FALSE)
+      }))
+      
+      if (!is.null(hard_pairs) && nrow(hard_pairs) > 0) {
+        hard_pairs <- unique(hard_pairs)
+        hard_freq <- as.data.frame(table(hard_pairs$key), stringsAsFactors = FALSE)
+        names(hard_freq) <- c("key", "N")
+        hard_freq$type <- "hard"
+        freq_all <- rbind(freq_all, hard_freq[, c("type","key","N")])
+      }
+      
+      if (!is.null(soft_pairs) && nrow(soft_pairs) > 0) {
+        soft_pairs <- unique(soft_pairs)
+        soft_freq <- as.data.frame(table(soft_pairs$key), stringsAsFactors = FALSE)
+        names(soft_freq) <- c("key", "N")
+        soft_freq$type <- "soft"
+        freq_all <- rbind(freq_all, soft_freq[, c("type","key","N")])
+      }
     }
-    
-    # Assemble + labels
-    freq_all <- data.table::rbindlist(list(
-      if (nrow(freq_hard) > 0) data.table::data.table(type = "hard", key = freq_hard$key, N = freq_hard$N) else NULL,
-      if (nrow(freq_soft) > 0) data.table::data.table(type = "soft", key = freq_soft$key, N = freq_soft$N) else NULL
-    ), use.names = TRUE, fill = TRUE)
     
     if (nrow(freq_all) > 0) {
-      freq_all[, in_cv := (type == "hard" & key %in% user_hard_base) | (type == "soft" & key %in% user_soft_base)]
-      freq_all[, label := ifelse(
-        type == "hard",
-        labelize_vec(key),
-        labelize_soft_vec(key)
-      )]
+      freq_all$in_cv <- (freq_all$type == "hard" & freq_all$key %in% user_hard_base) |
+        (freq_all$type == "soft" & freq_all$key %in% user_soft_base)
+      freq_all$label <- ifelse(
+        freq_all$type == "hard",
+        labelize_vec(freq_all$key),
+        labelize_soft_vec(freq_all$key)
+      )
     }
     
     # Points forts = Top 3 très demandés ET présents dans le CV (ou sélection si CV vide)
     strong <- character(0)
     if (nrow(freq_all) > 0) {
-      # Convertit en data.frame pour éviter toute ambiguïté data.table sur j/i
-      ff <- as.data.frame(freq_all)
-      ff_in  <- ff[isTRUE(ff$in_cv) | ff$in_cv == TRUE, , drop = FALSE]
+      ff_in  <- freq_all[isTRUE(freq_all$in_cv) | freq_all$in_cv == TRUE, , drop = FALSE]
       ff_in  <- ff_in[order(-ff_in$N), , drop = FALSE]
-      strong <- head(ff_in$label, 3)
+      strong <- head(as.character(ff_in$label), 3)
     }
     strong <- strong[!is.na(strong) & nzchar(strong)]
     
     # Axes de progression = Top 3 très demandés MAIS absents du CV (ou sélection si CV vide)
     missing <- character(0)
     if (nrow(freq_all) > 0) {
-      ff <- as.data.frame(freq_all)
-      ff_out <- ff[!(ff$in_cv %in% TRUE), , drop = FALSE]
+      ff_out <- freq_all[!(freq_all$in_cv %in% TRUE), , drop = FALSE]
       ff_out <- ff_out[order(-ff_out$N), , drop = FALSE]
-      missing <- head(ff_out$label, 3)
+      missing <- head(as.character(ff_out$label), 3)
     }
     missing <- missing[!is.na(missing) & nzchar(missing)]
     
@@ -3570,7 +3573,8 @@ server <- function(input, output, session) {
         pay <- format_pay(job)
         pay_txt <- if (is_nz1(pay$txt)) paste0(as.character(pay$txt), " € / ", as.character(pay$unit)) else ""
         
-        hs_lbl <- head(get_hard_lbl(job, n = 3), 3)
+        # Affiche toute la stack (hard skills) de l'offre
+        hs_lbl <- get_hard_lbl(job, n = Inf)
         
         div(class = "offer-card",
             onclick = sprintf("Shiny.setInputValue('open_offer', %d, {priority:'event'})",
