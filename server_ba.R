@@ -2619,19 +2619,97 @@ server <- function(input, output, session) {
   }, ignoreInit = TRUE)
   
   ## Extraction skills depuis PDF ----------------------------------------------
+  extract_text_from_pdf <- function(pdf_path){
+    if (is.null(pdf_path) || !nzchar(pdf_path) || !file.exists(pdf_path)) return("")
+    
+    # 1) pdftools (si dispo)
+    if (requireNamespace("pdftools", quietly = TRUE)) {
+      txt <- tryCatch(
+        paste(pdftools::pdf_text(pdf_path), collapse = " "),
+        error = function(e) ""
+      )
+      if (nzchar(txt)) return(txt)
+    }
+    
+    # 2) fallback CLI: pdftotext (poppler-utils) si dispo
+    bin <- Sys.which("pdftotext")
+    if (nzchar(bin)) {
+      out <- tempfile(fileext = ".txt")
+      # usage: pdftotext <pdf> <txt>
+      tryCatch(
+        suppressWarnings(system2(bin, args = c(pdf_path, out), stdout = TRUE, stderr = TRUE)),
+        error = function(e) NULL
+      )
+      if (file.exists(out)) {
+        txt <- tryCatch(paste(readLines(out, warn = FALSE, encoding = "UTF-8"), collapse = " "),
+                        error = function(e) "")
+        unlink(out)
+        if (nzchar(txt)) return(txt)
+      }
+    }
+    
+    ""
+  }
+  
+  normalize_cv_text <- function(x){
+    x <- as.character(x %||% "")
+    if (!nzchar(x)) return("")
+    x <- tolower(x)
+    x <- gsub("_", " ", x)
+    x <- gsub("-", " ", x)
+    # conserve / + # . (utile: ci/cd, c++, c#, .net) et espaces
+    x <- gsub("[^[:alnum:]/+#. ]", " ", x)
+    x <- gsub("\\s+", " ", x)
+    x <- trimws(x)
+    
+    # enlever accents (robuste)
+    if (requireNamespace("stringi", quietly = TRUE)) {
+      x <- stringi::stri_trans_general(x, "Latin-ASCII")
+      x <- tolower(trimws(x))
+    } else {
+      x <- tolower(trimws(iconv(x, from = "", to = "ASCII//TRANSLIT")))
+    }
+    x
+  }
+  
   extract_skills_from_cv <- function(pdf_path, skills_vocab){
     if (is.null(pdf_path) || !nzchar(pdf_path)) return(character(0))
-    if (!requireNamespace("pdftools", quietly = TRUE)) return(character(0))
     
-    txt <- paste(pdftools::pdf_text(pdf_path), collapse = " ")
-    txt <- tolower(txt)
+    raw_txt <- extract_text_from_pdf(pdf_path)
+    if (!nzchar(raw_txt)) return(character(0))
     
+    txt_norm <- normalize_cv_text(raw_txt)
+    if (!nzchar(txt_norm)) return(character(0))
+    
+    # 1) candidates (vocab) -> normalisés
     vocab <- unique(skills_vocab)
     vocab <- vocab[!is.na(vocab) & nzchar(vocab)]
+    vocab_norm <- unique(normalize_skill(vocab))
+    vocab_norm <- vocab_norm[!is.na(vocab_norm) & nzchar(vocab_norm)]
     
-    vocab[vapply(vocab, function(s){
-      str_detect(txt, fixed(tolower(s)))
-    }, logical(1))]
+    # 2) match exact-ish (avec padding pour éviter les sous-chaînes)
+    txt_pad <- paste0(" ", txt_norm, " ")
+    pat_pad <- paste0(" ", vocab_norm, " ")
+    m_vocab <- vapply(pat_pad, function(p) str_detect(txt_pad, fixed(p)), logical(1))
+    found_vocab <- vocab_norm[m_vocab]
+    
+    # 3) match compact (ex: "powerbi" vs "power bi") sur tokens assez longs
+    txt_compact <- gsub("[^[:alnum:]+#]", "", txt_norm)
+    vocab_compact_all <- gsub("[^[:alnum:]+#]", "", vocab_norm)
+    keep2 <- nchar(vocab_compact_all) >= 4
+    found_compact_norm <- character(0)
+    if (nzchar(txt_compact) && any(keep2)) {
+      vv <- vocab_compact_all[keep2]
+      m2 <- vapply(vv, function(p) str_detect(txt_compact, fixed(p)), logical(1))
+      found_compact_norm <- vocab_norm[keep2][m2]
+    }
+    
+    # 4) retour en canon (clé stable)
+    # - found_vocab: déjà normalisé (avec espaces)
+    # - found_compact_norm: vocab_norm retrouvé via matching compact
+    found_all <- unique(c(found_vocab, found_compact_norm))
+    found_all <- found_all[!is.na(found_all) & nzchar(found_all)]
+    canonize_vec(found_all)
   }
   
   has_mp_cv <- reactive({
@@ -2710,7 +2788,12 @@ server <- function(input, output, session) {
     applied_mp$mp_source <- src
     
     # Parse CV (on est sûr que cv_path existe ici)
-    vocab <- sort(unique(split_tokens(jobs_df$Hard_Skills)))
+    # On utilise le même référentiel que le marché (canon + labels + raw) pour maximiser le matching.
+    vocab <- unique(c(
+      hard_ref$canon,
+      hard_ref$label,
+      split_tokens(jobs_df$Hard_Skills)
+    ))
     rv$mp_cv_terms <- extract_skills_from_cv(cv_path, vocab)
     
     rv$mp_run_ok <- input$mp_run
@@ -2885,6 +2968,41 @@ server <- function(input, output, session) {
     
     if (!is.null(sm)) {
       
+      # Match : décroissant (Top recommandations)
+      if (sm == "match") {
+        user_skills_can <- unique(c(applied_mp$mp_hard_skills, canonize_vec(rv$mp_cv_terms)))
+        user_skills_can <- user_skills_can[!is.na(user_skills_can) & nzchar(user_skills_can)]
+        
+        # pondération marché (skills les plus demandées comptent plus)
+        freq_m <- market_skill_freq(data)
+        w_map <- if (nrow(freq_m) > 0) setNames(pmax(1, freq_m$N), freq_m$skill) else NULL
+        
+        data[, .m := vapply(seq_len(.N), function(i){
+          job <- data[i]
+          
+          # Hard skills canon de l’offre
+          js <- if (has_col(job, "Hard_Skills_Canon")) {
+            split_tokens(job$Hard_Skills_Canon)
+          } else {
+            get_hard_can(job)
+          }
+          js <- canonize_vec(js)
+          js <- unique(js[!is.na(js) & nzchar(js)])
+          
+          if (length(js) == 0 || length(user_skills_can) == 0) return(0)
+          
+          ww <- if (!is.null(w_map)) unname(w_map[js]) else rep(1, length(js))
+          ww[!is.finite(ww) | is.na(ww)] <- 1
+          denom <- sum(ww, na.rm = TRUE)
+          numer <- sum(ww[js %in% user_skills_can], na.rm = TRUE)
+          if (!is.finite(denom) || denom <= 0) return(0)
+          round(100 * numer / denom)
+        }, numeric(1))]
+        
+        data <- data[order(-.m, .idx)]
+        data[, .m := NULL]
+      }
+      
       # Salaire : décroissant
       if (sm == "salary_desc" && salary_cols_ok(data)) {
         if (!is.null(applied_mp$mp_contract) && tolower(applied_mp$mp_contract) == "freelance") {
@@ -2973,10 +3091,14 @@ server <- function(input, output, session) {
   ### Fréquence des skills demandées sur les offres filtrées ----
   market_skill_freq <- function(df_offers){
     if (is.null(df_offers) || nrow(df_offers) == 0) return(data.table::data.table())
-    if (!("Hard_Skills" %in% names(df_offers))) return(data.table::data.table())
     if (!("id" %in% names(df_offers))) return(data.table::data.table())
     
-    toks <- lapply(df_offers$Hard_Skills, function(x) unique(norm_skill(split_tokens(x))))
+    skill_col <- if ("Hard_Skills_Canon" %in% names(df_offers)) "Hard_Skills_Canon" else if ("Hard_Skills" %in% names(df_offers)) "Hard_Skills" else NA_character_
+    if (is.na(skill_col)) return(data.table::data.table())
+    
+    toks <- lapply(df_offers[[skill_col]], function(x) {
+      unique(canonize_vec(split_tokens(x)))
+    })
     
     long <- data.table::data.table(
       offer_id = rep(df_offers$id, lengths(toks)),
@@ -2990,10 +3112,12 @@ server <- function(input, output, session) {
   ### Calcul note basé sur la couverture de demande ----
   compute_radar_scores <- function(df_offers, user_skills){
     if (is.null(df_offers) || nrow(df_offers) == 0) return(rep(0, length(radar_cats)))
-    if (!("Hard_Skills" %in% names(df_offers)))      return(rep(0, length(radar_cats)))
     if (!("id" %in% names(df_offers)))              return(rep(0, length(radar_cats)))
     
-    toks <- lapply(df_offers$Hard_Skills, function(x) unique(norm_skill(split_tokens(x))))
+    skill_col <- if ("Hard_Skills_Canon" %in% names(df_offers)) "Hard_Skills_Canon" else if ("Hard_Skills" %in% names(df_offers)) "Hard_Skills" else NA_character_
+    if (is.na(skill_col)) return(rep(0, length(radar_cats)))
+    
+    toks <- lapply(df_offers[[skill_col]], function(x) unique(canonize_vec(split_tokens(x))))
     long <- data.table::data.table(
       offer_id = rep(df_offers$id, lengths(toks)),
       skill    = unlist(toks, use.names = FALSE)
@@ -3005,7 +3129,7 @@ server <- function(input, output, session) {
     freq <- unique(long, by = c("offer_id","cat","skill"))[, .N, by = .(cat, skill)]
     totals <- freq[, .(total = sum(N)), by = cat]
     
-    u <- unique(norm_skill(user_skills))
+    u <- unique(canonize_vec(user_skills))
     hits <- freq[skill %in% u, .(hit = sum(N)), by = cat]
     
     out <- merge(totals, hits, by = "cat", all.x = TRUE)
@@ -3026,6 +3150,7 @@ server <- function(input, output, session) {
     
     # Skills utilisateur = sélection + CV
     user_skills <- unique(c(applied_mp$mp_hard_skills, rv$mp_cv_terms))
+    user_skills <- canonize_vec(user_skills)
     user_skills <- user_skills[!is.na(user_skills) & nzchar(user_skills)]
     
     r_profil <- compute_radar_scores(
@@ -3074,18 +3199,24 @@ server <- function(input, output, session) {
     
     offers_used <- mp_sorted_jobs()
     
-    user_skills <- unique(c(applied_mp$mp_hard_skills, rv$mp_cv_terms))
-    user_skills <- norm_skill(user_skills)
-    user_skills <- user_skills[!is.na(user_skills) & nzchar(user_skills)]
+    # Skills utilisateur (canon) = sélection + CV
+    user_skills_can <- unique(c(applied_mp$mp_hard_skills, rv$mp_cv_terms))
+    user_skills_can <- canonize_vec(user_skills_can)
+    user_skills_can <- user_skills_can[!is.na(user_skills_can) & nzchar(user_skills_can)]
     
     # Points forts : skills réellement présentes (CV + sélection)
-    strong <- unique(c(rv$mp_cv_terms, applied_mp$mp_hard_skills))
-    strong <- strong[!is.na(strong) & nzchar(strong)]
-    strong <- head(strong, 6)
-    
-    # Axes de progression : skills très demandées mais absentes
     freq <- market_skill_freq(offers_used)
     
+    strong_can <- if (nrow(freq) > 0) {
+      intersect(user_skills_can, freq$skill)
+    } else {
+      user_skills_can
+    }
+    strong_can <- strong_can[!is.na(strong_can) & nzchar(strong_can)]
+    strong_can <- head(strong_can, 6)
+    strong <- labelize_vec(strong_can)
+    
+    # Axes de progression : skills très demandées mais absentes
     # ========================= ICI : NOTE "MATCH PARFAIT" =========================
     score <- NA_real_
     
@@ -3094,18 +3225,17 @@ server <- function(input, output, session) {
       score <- as.numeric(rv$mp_score)
     }
     
-    # 2) Sinon : on calcule une note robuste à partir du marché (couverture des skills)
+    # 2) Sinon : on calcule une note robuste à partir du marché (couverture pondérée)
     if (is.na(score)) {
-      if (nrow(freq) > 0) {
-        freq[, skill_norm := norm_skill(skill)]
-        topN <- head(freq$skill_norm, 25)
-        topN <- topN[!is.na(topN) & nzchar(topN)]
-        if (length(topN) > 0) {
-          cov_rate <- mean(topN %in% user_skills)
-          score <- round(100 * cov_rate)
-        } else {
-          score <- 0
-        }
+      if (length(user_skills_can) == 0) {
+        score <- 0
+      } else if (nrow(freq) > 0) {
+        k <- min(80, nrow(freq))
+        topF <- freq[1:k]
+        denom <- sum(topF$N, na.rm = TRUE)
+        numer <- sum(topF[skill %in% user_skills_can, N], na.rm = TRUE)
+        cov_rate <- if (is.finite(denom) && denom > 0) (numer / denom) else 0
+        score <- round(100 * cov_rate)
       } else {
         score <- 0
       }
@@ -3114,7 +3244,9 @@ server <- function(input, output, session) {
     score <- max(0, min(100, score))
     
     badge_class <- if (score >= 75) "is-green" else if (score >= 50) "is-orange" else "is-red"
-    interp <- if (score >= 75) {
+    interp <- if (length(user_skills_can) == 0) {
+      "Aucune compétence hard n’a pu être extraite de votre CV (ou sélectionnée). Ajoutez une section “Skills/Compétences” dans le PDF, ou sélectionnez quelques hard skills dans les filtres."
+    } else if (score >= 75) {
       "Très bon match : votre profil couvre la majorité des compétences demandées."
     } else if (score >= 50) {
       "Match correct : quelques compétences clés restent à renforcer pour viser le haut du panier."
@@ -3124,8 +3256,9 @@ server <- function(input, output, session) {
     
     # On prépare aussi les “missing” pour l’affichage juste après (inchangé)
     if (nrow(freq) > 0) {
-      freq[, skill_norm := norm_skill(skill)]
-      missing <- freq[!skill_norm %in% user_skills][1:6, skill]
+      missing_can <- freq[!skill %in% user_skills_can][1:6, skill]
+      missing_can <- missing_can[!is.na(missing_can) & nzchar(missing_can)]
+      missing <- labelize_vec(missing_can)
     } else {
       missing <- character(0)
     }
@@ -3149,6 +3282,164 @@ server <- function(input, output, session) {
       
       tags$div(style="margin-top:14px;", tags$strong("Axes de Progression :")),
       div(class="pills", lapply(missing, function(x) span(class="pill blue", x)))
+    )
+  })
+  
+  ## Output recommandations (Top 3) --------------------------------------------
+  output$mp_count <- renderText({
+    req(rv$mp_run_ok > 0)
+    d <- mp_sorted_jobs()
+    n <- if (is.null(d)) 0 else nrow(d)
+    n_show <- min(3, n)
+    paste0(n_show, " recommandation", ifelse(n_show > 1, "s", ""))
+  })
+  
+  output$mp_results_list <- renderUI({
+    req(rv$mp_run_ok > 0)
+    
+    d <- mp_sorted_jobs()
+    if (is.null(d) || nrow(d) == 0) return(h4("Aucune recommandation pour le moment."))
+    
+    dd <- head(d, 3)
+    
+    # Skills utilisateur = sélection + CV (canon)
+    user_skills_can <- unique(c(applied_mp$mp_hard_skills, canonize_vec(rv$mp_cv_terms)))
+    user_skills_can <- user_skills_can[!is.na(user_skills_can) & nzchar(user_skills_can)]
+    
+    # pondération marché (sur l’ensemble des offres filtrées)
+    freq_m <- market_skill_freq(d)
+    w_map <- if (nrow(freq_m) > 0) setNames(pmax(1, freq_m$N), freq_m$skill) else NULL
+    
+    badge_class <- function(p){
+      if (!is.finite(p)) return("is-gray")
+      if (p >= 70) return("is-green")
+      if (p >= 45) return("is-orange")
+      "is-red"
+    }
+    
+    match_percent_one <- function(job_row){
+      js <- if (has_col(job_row, "Hard_Skills_Canon")) {
+        split_tokens(job_row$Hard_Skills_Canon)
+      } else {
+        get_hard_can(job_row)
+      }
+      js <- canonize_vec(js)
+      js <- unique(js[!is.na(js) & nzchar(js)])
+      if (length(js) == 0 || length(user_skills_can) == 0) return(0)
+      
+      ww <- if (!is.null(w_map)) unname(w_map[js]) else rep(1, length(js))
+      ww[!is.finite(ww) | is.na(ww)] <- 1
+      denom <- sum(ww, na.rm = TRUE)
+      numer <- sum(ww[js %in% user_skills_can], na.rm = TRUE)
+      if (!is.finite(denom) || denom <= 0) return(0)
+      round(100 * numer / denom)
+    }
+    
+    tagList(
+      lapply(seq_len(nrow(dd)), function(i){
+        job <- dd[i]
+        
+        title <- pick_col(job, c("Job_Title","Title"))
+        comp  <- pick_col(job, c("Company","Company_Name"))
+        loc   <- pick_col(job, c("Location","City","Region"))
+        cp_raw <- pick_col(job, c("Code_Postal","CP","Postal_Code"))
+        cp_fmt <- format_postal_code(cp_raw)
+        loc_txt <- paste0(loc, if (nzchar(cp_fmt)) paste0(" (", cp_fmt, ")") else "")
+        
+        ct    <- pick_col(job, c("Contract_Type","Contract"))
+        ago   <- if (has_col(job, "Publish_Date")) posted_ago_txt(job$Publish_Date) else ""
+        sources <- get_offer_sources(job)
+        
+        pay <- format_pay(job)
+        pay_txt <- if (nzchar(pay$txt)) paste0(pay$txt, " € / ", pay$unit) else ""
+        
+        # Hard skills (rapide) : on affiche 3 et on surligne celles du profil
+        if (has_col(job, "Hard_Skills_Canon") && has_col(job, "Hard_Skills_Label")) {
+          hs_can <- head(split_tokens(job$Hard_Skills_Canon), 3)
+          hs_lbl <- head(split_tokens(job$Hard_Skills_Label), 3)
+        } else {
+          hs_can <- head(get_hard_can(job), 3)
+          hs_lbl <- labelize_vec(hs_can)
+        }
+        
+        # Avantages (rapide)
+        if (has_col(job, "Advantages_Canon") && has_col(job, "Advantages_Label")) {
+          adv_keys <- head(split_tokens(job$Advantages_Canon), 3)
+          adv_lbl  <- head(split_tokens(job$Advantages_Label), 3)
+        } else {
+          adv_keys <- head(get_adv_can(job), 3)
+          adv_lbl  <- labelize_adv_vec(adv_keys)
+        }
+        
+        is_fav <- as.numeric(job$id) %in% rv$favorites
+        
+        mp <- match_percent_one(job)
+        bcls <- badge_class(mp)
+        badge_txt <- paste0(mp, "% Match")
+        
+        div(
+          class = "offer-card js-offer-card",
+          onclick = sprintf(
+            "Shiny.setInputValue('open_offer', %d, {priority:'event'})",
+            as.numeric(job$id)
+          ),
+          div(class="offer-head",
+              div(class="offer-left",
+                  tags$h3(class="offer-title", title),
+                  div(class="offer-sub",
+                      tags$p(class="offer-company", comp),
+                      tags$p(class="offer-location", loc_txt)
+                  ),
+                  
+                  div(class="pills",
+                      if (nzchar(ct)) span(class = pill_cls(FALSE), ct),
+                      if (has_col(job,"Is_Remote") && is_remote_true(job$Is_Remote)) span(class = pill_cls(FALSE), "Télétravail possible"),
+                      if (nzchar(pay_txt)) span(class = pill_cls(FALSE), pay_txt)
+                  ),
+                  
+                  if (length(hs_can) > 0) div(class="offer-line",
+                                              span(class="offer-label", "Stack :"),
+                                              div(class="pills",
+                                                  lapply(seq_along(hs_can), function(j){
+                                                    span(
+                                                      class = pill_cls(hs_can[j] %in% user_skills_can),
+                                                      hs_lbl[j]
+                                                    )
+                                                  })
+                                              )
+                  ),
+                  
+                  if (length(adv_keys) > 0) div(class="offer-line",
+                                                span(class="offer-label", "Le(s) + :"),
+                                                div(class="pills",
+                                                    lapply(seq_along(adv_keys), function(j){
+                                                      span(class = pill_cls(FALSE), adv_lbl[j])
+                                                    })
+                                                )
+                  )
+              ),
+              
+              div(class="offer-right",
+                  tags$button(
+                    class = paste("fav-btn", if (is_fav) "is-on" else ""),
+                    onclick = sprintf(
+                      "event.stopPropagation(); Shiny.setInputValue('toggle_fav', %d, {priority:'event'})",
+                      as.numeric(job$id)
+                    ),
+                    tags$i(class = if (is_fav) "fas fa-heart" else "far fa-heart")
+                  ),
+                  
+                  div(class=paste("match-badge", bcls), badge_txt),
+                  
+                  if (nzchar(ago)) div(class="offer-time", ago),
+                  
+                  div(class = "offer-sources-bottom",
+                      render_source_logos(sources)
+                  )
+              )
+          )
+        )
+      })
     )
   })
   
