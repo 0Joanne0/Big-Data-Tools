@@ -3242,28 +3242,43 @@ server <- function(input, output, session) {
   
   ### Calcul note basé sur la couverture de demande ----
   compute_radar_scores <- function(df_offers, user_skills){
+    # NOTE: évite les pièges data.table (colonnes manquantes) en base R
     if (is.null(df_offers) || nrow(df_offers) == 0) return(rep(0, length(radar_cats)))
     if (!("Hard_Skills" %in% names(df_offers)))      return(rep(0, length(radar_cats)))
     if (!("id" %in% names(df_offers)))              return(rep(0, length(radar_cats)))
     
+    offer_ids <- df_offers$id
     toks <- lapply(df_offers$Hard_Skills, function(x) unique(norm_skill(split_tokens(x))))
-    long <- data.table::data.table(
-      offer_id = rep(df_offers$id, lengths(toks)),
-      skill    = unlist(toks, use.names = FALSE)
+    
+    long <- data.frame(
+      offer_id = rep(offer_ids, lengths(toks)),
+      skill    = unlist(toks, use.names = FALSE),
+      stringsAsFactors = FALSE
     )
+    if (nrow(long) == 0) return(rep(0, length(radar_cats)))
     
-    long[, cat := vapply(skill, map_cat_one, character(1))]
-    long <- long[!is.na(cat) & cat %in% radar_cats]
+    long$cat <- vapply(long$skill, map_cat_one, character(1))
+    long <- long[!is.na(long$cat) & long$cat %in% radar_cats, c("offer_id","cat","skill"), drop = FALSE]
+    if (nrow(long) == 0) return(rep(0, length(radar_cats)))
     
-    freq <- unique(long, by = c("offer_id","cat","skill"))[, .N, by = .(cat, skill)]
-    totals <- freq[, .(total = sum(N)), by = cat]
+    long <- unique(long)
+    
+    freq <- as.data.frame(table(long$cat, long$skill), stringsAsFactors = FALSE)
+    names(freq) <- c("cat","skill","N")
+    freq <- freq[freq$N > 0, , drop = FALSE]
+    if (nrow(freq) == 0) return(rep(0, length(radar_cats)))
+    
+    totals <- stats::aggregate(N ~ cat, data = freq, sum)
+    names(totals)[2] <- "total"
     
     u <- unique(norm_skill(user_skills))
-    hits <- freq[skill %in% u, .(hit = sum(N)), by = cat]
+    hits_df <- freq[freq$skill %in% u, , drop = FALSE]
+    hits <- if (nrow(hits_df) > 0) stats::aggregate(N ~ cat, data = hits_df, sum) else data.frame(cat = character(0), N = numeric(0))
+    names(hits)[2] <- "hit"
     
     out <- merge(totals, hits, by = "cat", all.x = TRUE)
-    out[is.na(hit), hit := 0]
-    out[, score := ifelse(total > 0, 10 * hit / total, 0)]
+    out$hit[is.na(out$hit)] <- 0
+    out$score <- ifelse(out$total > 0, 10 * out$hit / out$total, 0)
     
     res <- out$score[match(radar_cats, out$cat)]
     res[is.na(res)] <- 0
@@ -3273,28 +3288,39 @@ server <- function(input, output, session) {
   # Profil idéal = intensité de demande par catégorie (selon offres filtrées)
   # Normalisé sur [0,10] avec max(cat)=10 pour refléter la "forme" du marché ciblé.
   compute_ideal_profile <- function(df_offers){
+    # NOTE: base R pour éviter les pièges data.table
     if (is.null(df_offers) || nrow(df_offers) == 0) return(rep(0, length(radar_cats)))
     if (!("Hard_Skills" %in% names(df_offers)))      return(rep(0, length(radar_cats)))
     if (!("id" %in% names(df_offers)))              return(rep(0, length(radar_cats)))
-
+    
+    offer_ids <- df_offers$id
     toks <- lapply(df_offers$Hard_Skills, function(x) unique(norm_skill(split_tokens(x))))
-    long <- data.table::data.table(
-      offer_id = rep(df_offers$id, lengths(toks)),
-      skill    = unlist(toks, use.names = FALSE)
+    
+    long <- data.frame(
+      offer_id = rep(offer_ids, lengths(toks)),
+      skill    = unlist(toks, use.names = FALSE),
+      stringsAsFactors = FALSE
     )
-
-    long[, cat := vapply(skill, map_cat_one, character(1))]
-    long <- long[!is.na(cat) & cat %in% radar_cats]
     if (nrow(long) == 0) return(rep(0, length(radar_cats)))
-
-    freq <- unique(long, by = c("offer_id","cat","skill"))[, .N, by = .(cat, skill)]
-    totals <- freq[, .(total = sum(N)), by = cat]
-
-    tvec <- totals$total[match(radar_cats, totals$cat)]
+    
+    long$cat <- vapply(long$skill, map_cat_one, character(1))
+    long <- long[!is.na(long$cat) & long$cat %in% radar_cats, c("offer_id","cat","skill"), drop = FALSE]
+    if (nrow(long) == 0) return(rep(0, length(radar_cats)))
+    
+    long <- unique(long)
+    
+    freq <- as.data.frame(table(long$cat, long$skill), stringsAsFactors = FALSE)
+    names(freq) <- c("cat","skill","N")
+    freq <- freq[freq$N > 0, , drop = FALSE]
+    if (nrow(freq) == 0) return(rep(0, length(radar_cats)))
+    
+    totals <- stats::aggregate(N ~ cat, data = freq, sum)
+    tvec <- totals$N[match(radar_cats, totals$cat)]
     tvec[is.na(tvec)] <- 0
+    
     mx <- suppressWarnings(max(tvec, na.rm = TRUE))
     if (!is.finite(mx) || mx <= 0) return(rep(0, length(radar_cats)))
-
+    
     pmin(10, pmax(0, 10 * tvec / mx))
   }
   
