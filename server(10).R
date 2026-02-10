@@ -2975,7 +2975,7 @@ server <- function(input, output, session) {
     # Secteur
     if (length(applied_mp$mp_sector) > 0 && has_col(data, "Category")) {
       data[, Category := clean_txt(Category)]
-      sel <- clean_txt(applied$mp$mp_sector)
+      sel <- clean_txt(applied_mp$mp_sector)
       data <- data[Category %in% sel]
     }
     
