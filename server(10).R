@@ -302,8 +302,11 @@ COMPANY_NORM_SET <- unique(norm_txt(COMPANY_CHOICES))
 
 ###############################################################################.
 
-# Détection du statut Télétravail : Convertit 0/1 en TRUE/FALSE
-is_remote_true <- function(x) x == 1
+# Détection du statut Télétravail : Convertit 0/1 en TRUE/FALSE (NA-safe)
+is_remote_true <- function(x) {
+  v <- suppressWarnings(as.numeric(x))
+  !is.na(v) & v == 1
+}
 
 
 pick_col <- function(job, cols) {
@@ -3153,6 +3156,48 @@ server <- function(input, output, session) {
     long <- unique(long, by = c("offer_id", "skill"))
     long[, .N, by = skill][order(-N)]
   }
+
+  # Variante "catégorisée" (hard + soft) utilisée par mp_advice
+  # Doit renvoyer au minimum: cat, skill, N
+  market_skill_freq_cat <- function(df_offers){
+    if (is.null(df_offers) || nrow(df_offers) == 0) return(data.table::data.table())
+    if (!("id" %in% names(df_offers))) return(data.table::data.table())
+
+    out_list <- list()
+
+    # Hard skills
+    hard_col <- if ("Hard_Skills_Canon" %in% names(df_offers)) "Hard_Skills_Canon" else "Hard_Skills"
+    if (hard_col %in% names(df_offers)) {
+      toks <- lapply(df_offers[[hard_col]], function(x) unique(norm_skill(split_tokens(x))))
+      long <- data.table::data.table(
+        offer_id = rep(df_offers$id, lengths(toks)),
+        cat      = "hard",
+        skill    = unlist(toks, use.names = FALSE)
+      )
+      out_list <- c(out_list, list(long))
+    }
+
+    # Soft skills
+    soft_col <- if ("Soft_Skills_Canon" %in% names(df_offers)) "Soft_Skills_Canon" else "Soft_Skills"
+    if (soft_col %in% names(df_offers)) {
+      toks <- lapply(df_offers[[soft_col]], function(x) unique(norm_skill(split_tokens(x))))
+      long <- data.table::data.table(
+        offer_id = rep(df_offers$id, lengths(toks)),
+        cat      = "soft",
+        skill    = unlist(toks, use.names = FALSE)
+      )
+      out_list <- c(out_list, list(long))
+    }
+
+    if (length(out_list) == 0) return(data.table::data.table())
+
+    long_all <- data.table::rbindlist(out_list, use.names = TRUE, fill = TRUE)
+    long_all <- long_all[!is.na(skill) & nzchar(skill)]
+    if (nrow(long_all) == 0) return(data.table::data.table())
+
+    long_all <- unique(long_all, by = c("offer_id", "cat", "skill"))
+    long_all[, .N, by = .(cat, skill)][order(-N)]
+  }
   
   ### Calcul note basé sur la couverture de demande ----
   compute_radar_scores <- function(df_offers, user_skills){
@@ -3232,7 +3277,7 @@ server <- function(input, output, session) {
   
   output$mp_radar_box <- renderUI({
     # AVANT clic
-    if (is.null(rv$mp_run_ok) || rv$mp_run_ok <= 0) {
+    if (is.null(rv$mp_run_ok) || !is.finite(rv$mp_run_ok) || rv$mp_run_ok <= 0) {
       div(class = "mp-radar-placeholder",
           tags$h4("Votre diagnostic apparaîtra ici"),
           tags$p("Déposez votre CV (PDF) puis cliquez sur “Lancer l’analyse”."),
