@@ -117,8 +117,17 @@ navbarPage(
     tags$link(href = "https://unpkg.com/@fontsource/open-sauce-one@latest/index.css",
               rel  = "stylesheet"),
     # CSS et JS du projet
-    tags$link(rel = "stylesheet", type = "text/css", href = "style.css"),
-    tags$script(src = "script.js")
+    # (robuste) : si pas de dossier `www/`, on injecte les fichiers locaux en inline
+    if (file.exists("style.css")) {
+      tags$style(HTML(paste(readLines("style.css", warn = FALSE), collapse = "\n")))
+    } else {
+      tags$link(rel = "stylesheet", type = "text/css", href = "style.css")
+    },
+    if (file.exists("script.js")) {
+      tags$script(HTML(paste(readLines("script.js", warn = FALSE), collapse = "\n")))
+    } else {
+      tags$script(src = "script.js")
+    }
     
   ),
   
