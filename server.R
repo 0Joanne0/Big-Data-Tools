@@ -19,7 +19,9 @@ library(readxl)
 library(leaflet)
 
 # Chargement des données
-jobs_df <- data.table::fread("www/data_jobs.csv")
+# (robuste) : certains environnements n'ont pas de dossier `www/`
+jobs_path <- if (file.exists("www/data_jobs.csv")) "www/data_jobs.csv" else "data_jobs.csv"
+jobs_df <- data.table::fread(jobs_path)
 
 ###############################################################################.
 # HELPERS ----------------------------------------------------------------------
@@ -1859,11 +1861,17 @@ server <- function(input, output, session) {
     
     rv$mp_page <- 1
     
-    tt <- input$mp_title; if (is.null(tt)) tt <- ""
-    ll <- input$mp_loc;   if (is.null(ll)) ll <- ""
+    # Objectif (supporte `textInput` (scalaire) OU `selectizeInput(multiple=TRUE)` (vecteur))
+    tt <- input$mp_title %||% character(0)
+    ll <- input$mp_loc   %||% character(0)
     
-    applied_mp$mp_title <- trimws(as.character(tt))
-    applied_mp$mp_loc   <- trimws(as.character(ll))
+    tt <- trimws(as.character(tt))
+    ll <- trimws(as.character(ll))
+    tt <- tt[!is.na(tt) & nzchar(tt)]
+    ll <- ll[!is.na(ll) & nzchar(ll)]
+    
+    applied_mp$mp_title <- tt
+    applied_mp$mp_loc   <- ll
     
     applied_mp$mp_contract       <- input$mp_contract
     applied_mp$mp_duration_only  <- isTRUE(input$mp_duration_only)
@@ -1902,13 +1910,54 @@ server <- function(input, output, session) {
     
   }, ignoreInit = TRUE)
   
+  # Bouton "Actualiser la recherche" (Match) : met à jour les filtres sans re-parser le CV
+  observeEvent(input$mp_apply_filters, {
+    req(rv$mp_run_ok > 0)
+    
+    tt <- input$mp_title %||% character(0)
+    ll <- input$mp_loc   %||% character(0)
+    
+    tt <- trimws(as.character(tt))
+    ll <- trimws(as.character(ll))
+    tt <- tt[!is.na(tt) & nzchar(tt)]
+    ll <- ll[!is.na(ll) & nzchar(ll)]
+    
+    applied_mp$mp_title <- tt
+    applied_mp$mp_loc   <- ll
+    
+    applied_mp$mp_contract       <- input$mp_contract
+    applied_mp$mp_duration_only  <- isTRUE(input$mp_duration_only)
+    applied_mp$mp_duration_range <- input$mp_duration_range
+    
+    applied_mp$mp_experience_level <- input$mp_experience_level
+    
+    applied_mp$mp_salary_only  <- isTRUE(input$mp_salary_only)
+    applied_mp$mp_salary_range <- input$mp_salary_range
+    
+    applied_mp$mp_remote <- isTRUE(input$mp_remote)
+    
+    applied_mp$mp_sector           <- input$mp_sector
+    applied_mp$mp_company_category <- input$mp_company_category
+    applied_mp$mp_hard_skills      <- input$mp_hard_skills
+    applied_mp$mp_soft_skills      <- input$mp_soft_skills
+    applied_mp$mp_advantages       <- input$mp_advantages
+    applied_mp$mp_date             <- input$mp_date
+    
+    src <- c()
+    if (isTRUE(input$mp_source_li))   src <- c(src, "LinkedIn")
+    if (isTRUE(input$mp_source_in))   src <- c(src, "Indeed")
+    if (isTRUE(input$mp_source_wttj)) src <- c(src, "Welcome to the Jungle")
+    applied_mp$mp_source <- src
+    
+  }, ignoreInit = TRUE)
+  
   ## Filtrage Match (copie Explorateur, version Match) -------------------------
   mp_filtered_jobs <- reactive({
     data <- jobs_df
     
     # Objectif titre
-    if (nzchar(applied_mp$mp_title)) {
-      terms <- applied_mp$mp_title
+    if (!is.null(applied_mp$mp_title) && length(applied_mp$mp_title) > 0 && any(nzchar(applied_mp$mp_title))) {
+      terms <- applied_mp$mp_title[nzchar(applied_mp$mp_title)]
       ok_title <- if (has_col(data, "Job_Title"))   match_any_term(data$Job_Title, terms) else rep(FALSE, nrow(data))
       ok_comp  <- if (has_col(data, "Company"))     match_any_term(data$Company, terms) else rep(FALSE, nrow(data))
       ok_hard  <- if (has_col(data, "Hard_Skills")) match_any_term(data$Hard_Skills, terms) else rep(FALSE, nrow(data))
@@ -1916,8 +1965,8 @@ server <- function(input, output, session) {
     }
     
     # Objectif localisation
-    if (nzchar(applied_mp$mp_loc) && has_col(data, "Location")) {
-      data <- data[match_any_term(data$Location, applied_mp$mp_loc), ]
+    if (has_col(data, "Location") && !is.null(applied_mp$mp_loc) && length(applied_mp$mp_loc) > 0 && any(nzchar(applied_mp$mp_loc))) {
+      data <- data[match_any_term(data$Location, applied_mp$mp_loc[nzchar(applied_mp$mp_loc)]), ]
     }
     
     # Type contrat
@@ -2042,6 +2091,23 @@ server <- function(input, output, session) {
     data
   })
   
+  # Score simple de compatibilité (hard skills) : % de skills de l'offre couvertes par le profil
+  compute_match_percent_vec <- function(df_offers, user_skills){
+    if (is.null(df_offers) || nrow(df_offers) == 0) return(numeric(0))
+    if (!has_col(df_offers, "Hard_Skills")) return(rep(NA_real_, nrow(df_offers)))
+    
+    u <- unique(norm_txt(user_skills))
+    u <- u[!is.na(u) & nzchar(u)]
+    if (length(u) == 0) return(rep(NA_real_, nrow(df_offers)))
+    
+    vapply(df_offers$Hard_Skills, function(x){
+      toks <- norm_txt(split_tokens(x))
+      toks <- toks[!is.na(toks) & nzchar(toks)]
+      if (length(toks) == 0) return(0)
+      100 * sum(toks %in% u) / length(toks)
+    }, numeric(1))
+  }
+  
   ## Tri Match -----------------------------------------------------------------
   mp_sorted_jobs <- reactive({
     data <- data.table::copy(mp_filtered_jobs())
@@ -2049,10 +2115,26 @@ server <- function(input, output, session) {
     
     data[, .idx := .I]
     
+    # Score de compatibilité (pour "relevance"/Top 3)
+    user_skills <- unique(c(applied_mp$mp_hard_skills, rv$mp_cv_terms))
+    user_skills <- user_skills[!is.na(user_skills) & nzchar(trimws(as.character(user_skills)))]
+    data[, Match_Pct := compute_match_percent_vec(data, user_skills)]
+    
     # Compat : anciennes valeurs UI -> nouvelles
     sm <- normalize_sort_mode(input$mp_sort)
     
     if (!is.null(sm)) {
+      
+      # Pertinence : d'abord score de match
+      if (sm %in% c("relevance", "match")) {
+        if (has_col(data, "Publish_Date")) {
+          data <- data[order(is.na(Match_Pct), -Match_Pct,
+                             is.na(Publish_Date), -as.numeric(Publish_Date),
+                             .idx)]
+        } else {
+          data <- data[order(is.na(Match_Pct), -Match_Pct, .idx)]
+        }
+      }
       
       # Salaire : décroissant
       if (sm == "salary_desc" && salary_cols_ok(data)) {
@@ -2094,6 +2176,189 @@ server <- function(input, output, session) {
     # Par défaut : si "relevance", on ne force pas de tri ici
     data[, .idx := NULL]
     data
+  })
+  
+  # Compteur (Match) : on affiche le Top 3 mais on garde l'info du volume
+  output$mp_count <- renderText({
+    req(rv$mp_run_ok > 0)
+    d <- mp_sorted_jobs()
+    n <- if (is.null(d)) 0 else nrow(d)
+    paste0("Top 3 sur ", n, " offre", ifelse(n > 1, "s", ""))
+  })
+  
+  # UI recommandations (Match) : TOP 3
+  match_badge_class_mp <- function(p){
+    if (!is.finite(p)) return("is-gray")
+    if (p >= 70) return("is-green")
+    if (p >= 45) return("is-orange")
+    "is-red"
+  }
+  
+  output$mp_results_list <- renderUI({
+    req(rv$mp_run_ok > 0)
+    
+    d <- mp_sorted_jobs()
+    if (is.null(d) || nrow(d) == 0) return(h4("Aucune recommandation avec ces critères."))
+    
+    dd <- head(d, 3)
+    
+    # Pour les pastilles stack : on considère sélection + CV
+    selected_skills <- unique(c(applied_mp$mp_hard_skills, rv$mp_cv_terms))
+    
+    tagList(
+      lapply(seq_len(nrow(dd)), function(i){
+        job <- dd[i]
+        
+        title <- pick_col(job, c("Job_Title","Title"))
+        comp  <- pick_col(job, c("Company","Company_Name"))
+        loc   <- pick_col(job, c("Location","City","Region"))
+        cp_raw <- pick_col(job, c("Code_Postal","CP","Postal_Code"))
+        cp_fmt <- format_postal_code(cp_raw)
+        loc_txt <- paste0(loc, if (nzchar(cp_fmt)) paste0(" (", cp_fmt, ")") else "")
+        
+        ct    <- pick_col(job, c("Contract_Type","Contract"))
+        ago   <- if (has_col(job, "Publish_Date")) posted_ago_txt(job$Publish_Date) else ""
+        sources <- get_offer_sources(job)
+        
+        pay <- format_pay(job)
+        pay_txt <- if (nzchar(pay$txt)) paste0(pay$txt, " € / ", pay$unit) else ""
+        
+        hs <- unique(split_tokens(pick_col(job, c("Hard_Skills"))))
+        hs <- head(hs, 3)
+        
+        adv_col <- c("Benefits","Advantages","Perks")[c("Benefits","Advantages","Perks") %in% names(jobs_df)][1]
+        adv <- if (!is.na(adv_col)) unique(split_tokens(pick_col(job, adv_col))) else character(0)
+        adv <- head(adv, 3)
+        
+        is_fav <- as.numeric(job$id) %in% rv$favorites
+        
+        contract_active <- !is.null(applied_mp$mp_contract) && applied_mp$mp_contract != "Tous"
+        remote_active   <- isTRUE(applied_mp$mp_remote)
+        salary_active   <- isTRUE(applied_mp$mp_salary_only)
+        hard_active     <- length(applied_mp$mp_hard_skills) > 0 || length(rv$mp_cv_terms) > 0
+        adv_active      <- length(applied_mp$mp_advantages) > 0
+        
+        mp <- if (has_col(job, "Match_Pct")) as.numeric(job$Match_Pct) else NA_real_
+        badge_txt <- if (is.finite(mp)) paste0(round(mp), "% Match") else "Match —"
+        badge_cls <- match_badge_class_mp(mp)
+        
+        div(
+          class = "offer-card js-offer-card",
+          onclick = sprintf(
+            "Shiny.setInputValue('open_offer', %d, {priority:'event'})",
+            as.numeric(job$id)
+          ),
+          div(class="offer-head",
+              div(class="offer-left",
+                  tags$h3(class="offer-title", title),
+                  div(class="offer-sub",
+                      tags$p(class="offer-company", comp),
+                      tags$p(class="offer-location", loc_txt)
+                  ),
+                  
+                  div(class="pills",
+                      if (nzchar(ct)) {
+                        is_ct_selected <- contract_active &&
+                          tolower(trimws(ct)) == tolower(trimws(applied_mp$mp_contract))
+                        span(class = pill_cls(is_ct_selected), ct)
+                      },
+                      if (has_col(job,"Is_Remote") && is_remote_true(job$Is_Remote)) {
+                        span(class = pill_cls(remote_active), "Télétravail possible")
+                      },
+                      if (nzchar(pay_txt)) {
+                        span(class = pill_cls(salary_active), pay_txt)
+                      }
+                  ),
+                  
+                  if (length(hs) > 0) div(class="offer-line",
+                                          span(class="offer-label", "Stack :"),
+                                          div(class="pills",
+                                              lapply(hs, function(x){
+                                                span(class = pill_cls(hard_active && token_in_selected(x, selected_skills)), x)
+                                              })
+                                          )
+                  ),
+                  
+                  if (length(adv) > 0) div(class="offer-line",
+                                           span(class="offer-label", "Le(s) + :"),
+                                           div(class="pills",
+                                               lapply(adv, function(x){
+                                                 span(class = pill_cls(adv_active && token_in_selected(x, applied_mp$mp_advantages)), x)
+                                               })
+                                           )
+                  )
+              ),
+              
+              div(class="offer-right",
+                  tags$button(
+                    class = paste("fav-btn", if (is_fav) "is-on" else ""),
+                    onclick = sprintf(
+                      "event.stopPropagation(); Shiny.setInputValue('toggle_fav', %d, {priority:'event'})",
+                      as.numeric(job$id)
+                    ),
+                    tags$i(class = if (is_fav) "fas fa-heart" else "far fa-heart")
+                  ),
+                  
+                  div(class=paste("match-badge", badge_cls), badge_txt),
+                  if (nzchar(ago)) div(class="offer-time", ago),
+                  
+                  div(class = "offer-sources-bottom",
+                      render_source_logos(sources)
+                  )
+              )
+          )
+        )
+      })
+    )
+  })
+  
+  # Carte (Match) : pour éviter les erreurs si l'utilisateur bascule en "Carte"
+  mp_map_data <- reactive({
+    d <- mp_sorted_jobs()
+    if (is.null(d) || nrow(d) == 0) return(d)
+    if (!has_col(d, "Latitude") || !has_col(d, "Longitude")) return(d[0])
+    d[is.finite(Latitude) & is.finite(Longitude)]
+  })
+  
+  output$mp_map <- leaflet::renderLeaflet({
+    req(rv$mp_run_ok > 0)
+    d <- mp_map_data()
+    
+    m <- leaflet::leaflet() %>%
+      leaflet::addProviderTiles(leaflet::providers$OpenStreetMap) %>%
+      leaflet::setView(lng = 2.2137, lat = 46.2276, zoom = 5)
+    
+    if (is.null(d) || nrow(d) == 0) return(m)
+    
+    title <- if (has_col(d, "Job_Title")) as.character(d$Job_Title) else ""
+    comp  <- if (has_col(d, "Company"))   as.character(d$Company)   else ""
+    loc   <- if (has_col(d, "Location"))  as.character(d$Location)  else ""
+    
+    popup <- mapply(function(id, t, c, l){
+      t <- ifelse(is.na(t), "", t)
+      c <- ifelse(is.na(c), "", c)
+      l <- ifelse(is.na(l), "", l)
+      paste0(
+        "<div class='map-popup' onclick=\"Shiny.setInputValue('open_offer', ", id, ", {priority:'event'})\">",
+        "<b>", htmltools::htmlEscape(t), "</b><br>",
+        htmltools::htmlEscape(c), "<br>",
+        htmltools::htmlEscape(l),
+        "</div>"
+      )
+    }, d$id, title, comp, loc, SIMPLIFY = TRUE, USE.NAMES = FALSE)
+    
+    m %>%
+      leaflet::addCircleMarkers(
+        data = d,
+        lng = ~Longitude, lat = ~Latitude,
+        radius = 6,
+        stroke = TRUE, weight = 1,
+        fillOpacity = 0.8,
+        popup = popup,
+        group = "mp_jobs_pts",
+        clusterOptions = CLUSTER_OPTS,
+        popupOptions = leaflet::popupOptions(className = "job-popup")
+      )
   })
   
   ## Graphique -----------------------------------------------------------------

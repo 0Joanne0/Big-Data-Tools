@@ -21,7 +21,9 @@ library(readxl)
 library(leaflet) 
 
 # Chargement des données
-jobs_df <-  data.table::fread("www/data_jobs.csv")
+# (robuste) : certains environnements n'ont pas de dossier `www/`
+jobs_path <- if (file.exists("www/data_jobs.csv")) "www/data_jobs.csv" else "data_jobs.csv"
+jobs_df <- data.table::fread(jobs_path)
 
 col_hard <- "Hard_Skills"
 col_soft <- "Soft_Skills"
@@ -606,24 +608,24 @@ navbarPage(
                                 selectizeInput("mp_soft_skills", "Soft skills", choices = NULL, multiple = TRUE, options = list(placeholder = "Écrire une compétence...", plugins = list("remove_button"), create = TRUE, persist = FALSE, openOnFocus = TRUE)),
                                 selectizeInput("mp_advantages", "Avantages", choices = NULL, multiple = TRUE, options = list(placeholder = "Écrire un avantage...", plugins = list("remove_button"), create = TRUE, persist = FALSE, openOnFocus = TRUE)),
                                 selectInput("mp_date", "Date de publication", choices = c("Toutes", "Depuis 24h", "Depuis 3 jours", "Depuis 1 semaine", "Depuis 1 mois"), selected = "Toutes"),
-                                ###div(class = "filter-block", div(class = "salary-title", "Source de l’offre"), div(id = "mp_source_grid", class = "source-grid", div(class = "sg-item", checkboxInput("mp_source_all", "Tous", value = TRUE)), div(class = "sg-item", checkboxInput("mp_source_li", "LinkedIn", value = TRUE)), div(class = "sg-item", checkboxInput("mp_source_in", "Indeed", value = TRUE)), div(class = "sg-item", checkboxInput("mp_source_wttj", "Welcome to the Jungle", value = TRUE)))),
+                                # Source de l’offre (Match Parfait) : IDs mp_* (sinon interférences avec l'Explorateur)
                                 div(class = "filter-block",
                                     div(class = "salary-title", "Source de l’offre"),
-                                    div(id = "exp_source_grid", class = "source-grid",
+                                    div(id = "mp_source_grid", class = "source-grid",
                                         div(class = "sg-item",
-                                            checkboxInput("exp_source_all", "Tous", value = TRUE)
+                                            checkboxInput("mp_source_all", "Tous", value = TRUE)
                                         ),
                                         div(class = "sg-item",
-                                            checkboxInput("exp_source_li",  "LinkedIn", value = TRUE)
+                                            checkboxInput("mp_source_li",  "LinkedIn", value = TRUE)
                                         ),
                                         div(class = "sg-item",
-                                            checkboxInput("exp_source_in",  "Indeed",   value = TRUE)
+                                            checkboxInput("mp_source_in",  "Indeed",   value = TRUE)
                                         ),
                                         div(class = "sg-item",
-                                            checkboxInput("exp_source_wttj",  "Welcome to the Jungle",value = TRUE)
+                                            checkboxInput("mp_source_wttj",  "Welcome to the Jungle", value = TRUE)
                                         )
                                     )
-                                ),####Fin 
+                                ),
                                 actionButton("mp_apply_filters", "Actualiser la recherche", class = "apply-btn w-100")
                             )
                      ),
@@ -631,8 +633,9 @@ navbarPage(
                             div(class = "mp-dashboard",
                                 div(class = "mp-dashboard-title", "DASHBOARD DIAGNOSTIC"),
                                 div(class = "mp-dash-grid",
-                                    div(class = "mp-dash-left", uiOutput("mp_radar_box")
-                                        ),
+                                    div(class = "mp-dash-left",
+                                        plotly::plotlyOutput("mp_radar", height = "260px")
+                                    ),
                                     
                                     div(class = "mp-dash-right", uiOutput("mp_advice"))
                                 )
@@ -659,7 +662,8 @@ navbarPage(
                                         )
                                     )
                                 ),
-                                uiOutput("mp_list")
+                                # Affichage recommandations (Top 3 géré côté serveur)
+                                uiOutput("mp_results_list")
                             )
                      )
                    )
