@@ -2788,7 +2788,12 @@ server <- function(input, output, session) {
     applied_mp$mp_source <- src
     
     # Parse CV (on est sûr que cv_path existe ici)
-    vocab <- sort(unique(split_tokens(jobs_df$Hard_Skills)))
+    # On utilise le même référentiel que le marché (canon + labels + raw) pour maximiser le matching.
+    vocab <- unique(c(
+      hard_ref$canon,
+      hard_ref$label,
+      split_tokens(jobs_df$Hard_Skills)
+    ))
     rv$mp_cv_terms <- extract_skills_from_cv(cv_path, vocab)
     
     rv$mp_run_ok <- input$mp_run
@@ -2968,6 +2973,10 @@ server <- function(input, output, session) {
         user_skills_can <- unique(c(applied_mp$mp_hard_skills, canonize_vec(rv$mp_cv_terms)))
         user_skills_can <- user_skills_can[!is.na(user_skills_can) & nzchar(user_skills_can)]
         
+        # pondération marché (skills les plus demandées comptent plus)
+        freq_m <- market_skill_freq(data)
+        w_map <- if (nrow(freq_m) > 0) setNames(pmax(1, freq_m$N), freq_m$skill) else NULL
+        
         data[, .m := vapply(seq_len(.N), function(i){
           job <- data[i]
           
@@ -2981,7 +2990,13 @@ server <- function(input, output, session) {
           js <- unique(js[!is.na(js) & nzchar(js)])
           
           if (length(js) == 0 || length(user_skills_can) == 0) return(0)
-          round(100 * sum(js %in% user_skills_can) / length(js))
+          
+          ww <- if (!is.null(w_map)) unname(w_map[js]) else rep(1, length(js))
+          ww[!is.finite(ww) | is.na(ww)] <- 1
+          denom <- sum(ww, na.rm = TRUE)
+          numer <- sum(ww[js %in% user_skills_can], na.rm = TRUE)
+          if (!is.finite(denom) || denom <= 0) return(0)
+          round(100 * numer / denom)
         }, numeric(1))]
         
         data <- data[order(-.m, .idx)]
@@ -3210,19 +3225,17 @@ server <- function(input, output, session) {
       score <- as.numeric(rv$mp_score)
     }
     
-    # 2) Sinon : on calcule une note robuste à partir du marché (couverture des skills)
+    # 2) Sinon : on calcule une note robuste à partir du marché (couverture pondérée)
     if (is.na(score)) {
-      if (nrow(freq) > 0) {
-        topN <- head(freq$skill, 30)
-        topN <- topN[!is.na(topN) & nzchar(topN)]
-        if (length(topN) > 0 && nrow(freq[skill %in% topN]) > 0) {
-          denom <- sum(freq[skill %in% topN, N], na.rm = TRUE)
-          numer <- sum(freq[skill %in% topN & skill %in% user_skills_can, N], na.rm = TRUE)
-          cov_rate <- if (is.finite(denom) && denom > 0) (numer / denom) else 0
-          score <- round(100 * cov_rate)
-        } else {
-          score <- 0
-        }
+      if (length(user_skills_can) == 0) {
+        score <- 0
+      } else if (nrow(freq) > 0) {
+        k <- min(80, nrow(freq))
+        topF <- freq[1:k]
+        denom <- sum(topF$N, na.rm = TRUE)
+        numer <- sum(topF[skill %in% user_skills_can, N], na.rm = TRUE)
+        cov_rate <- if (is.finite(denom) && denom > 0) (numer / denom) else 0
+        score <- round(100 * cov_rate)
       } else {
         score <- 0
       }
@@ -3231,7 +3244,9 @@ server <- function(input, output, session) {
     score <- max(0, min(100, score))
     
     badge_class <- if (score >= 75) "is-green" else if (score >= 50) "is-orange" else "is-red"
-    interp <- if (score >= 75) {
+    interp <- if (length(user_skills_can) == 0) {
+      "Aucune compétence hard n’a pu être extraite de votre CV (ou sélectionnée). Ajoutez une section “Skills/Compétences” dans le PDF, ou sélectionnez quelques hard skills dans les filtres."
+    } else if (score >= 75) {
       "Très bon match : votre profil couvre la majorité des compétences demandées."
     } else if (score >= 50) {
       "Match correct : quelques compétences clés restent à renforcer pour viser le haut du panier."
@@ -3291,6 +3306,10 @@ server <- function(input, output, session) {
     user_skills_can <- unique(c(applied_mp$mp_hard_skills, canonize_vec(rv$mp_cv_terms)))
     user_skills_can <- user_skills_can[!is.na(user_skills_can) & nzchar(user_skills_can)]
     
+    # pondération marché (sur l’ensemble des offres filtrées)
+    freq_m <- market_skill_freq(d)
+    w_map <- if (nrow(freq_m) > 0) setNames(pmax(1, freq_m$N), freq_m$skill) else NULL
+    
     badge_class <- function(p){
       if (!is.finite(p)) return("is-gray")
       if (p >= 70) return("is-green")
@@ -3307,7 +3326,13 @@ server <- function(input, output, session) {
       js <- canonize_vec(js)
       js <- unique(js[!is.na(js) & nzchar(js)])
       if (length(js) == 0 || length(user_skills_can) == 0) return(0)
-      round(100 * sum(js %in% user_skills_can) / length(js))
+      
+      ww <- if (!is.null(w_map)) unname(w_map[js]) else rep(1, length(js))
+      ww[!is.finite(ww) | is.na(ww)] <- 1
+      denom <- sum(ww, na.rm = TRUE)
+      numer <- sum(ww[js %in% user_skills_can], na.rm = TRUE)
+      if (!is.finite(denom) || denom <= 0) return(0)
+      round(100 * numer / denom)
     }
     
     tagList(
