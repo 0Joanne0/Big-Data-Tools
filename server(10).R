@@ -3241,6 +3241,34 @@ server <- function(input, output, session) {
     res[is.na(res)] <- 0
     pmin(10, pmax(0, res))
   }
+
+  # Profil idéal = intensité de demande par catégorie (selon offres filtrées)
+  # Normalisé sur [0,10] avec max(cat)=10 pour refléter la "forme" du marché ciblé.
+  compute_ideal_profile <- function(df_offers){
+    if (is.null(df_offers) || nrow(df_offers) == 0) return(rep(0, length(radar_cats)))
+    if (!("Hard_Skills" %in% names(df_offers)))      return(rep(0, length(radar_cats)))
+    if (!("id" %in% names(df_offers)))              return(rep(0, length(radar_cats)))
+
+    toks <- lapply(df_offers$Hard_Skills, function(x) unique(norm_skill(split_tokens(x))))
+    long <- data.table::data.table(
+      offer_id = rep(df_offers$id, lengths(toks)),
+      skill    = unlist(toks, use.names = FALSE)
+    )
+
+    long[, cat := vapply(skill, map_cat_one, character(1))]
+    long <- long[!is.na(cat) & cat %in% radar_cats]
+    if (nrow(long) == 0) return(rep(0, length(radar_cats)))
+
+    freq <- unique(long, by = c("offer_id","cat","skill"))[, .N, by = .(cat, skill)]
+    totals <- freq[, .(total = sum(N)), by = cat]
+
+    tvec <- totals$total[match(radar_cats, totals$cat)]
+    tvec[is.na(tvec)] <- 0
+    mx <- suppressWarnings(max(tvec, na.rm = TRUE))
+    if (!is.finite(mx) || mx <= 0) return(rep(0, length(radar_cats)))
+
+    pmin(10, pmax(0, 10 * tvec / mx))
+  }
   
   ## Output radar --------------------------------------------------------------
   output$mp_radar <- plotly::renderPlotly({
@@ -3254,7 +3282,7 @@ server <- function(input, output, session) {
     user_skills <- user_skills[!is.na(user_skills) & nzchar(user_skills)]
     
     r_profil <- compute_radar_scores(offers_used, user_skills)
-    r_ideal  <- rep(10, length(radar_cats))
+    r_ideal  <- compute_ideal_profile(offers_used)
     
     plotly::plot_ly(type = "scatterpolar", fill = "toself") %>%
       plotly::add_trace(
