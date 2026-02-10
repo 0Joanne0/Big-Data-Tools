@@ -351,6 +351,10 @@ get_offer_sources <- function(job_row){
 
 # Affichage des Logos
 source_logo_tag <- function(src){
+  if (is.null(src) || length(src) == 0) return(NULL)
+  src <- as.character(src[1])
+  if (is.na(src) || !nzchar(trimws(src))) return(NULL)
+  
   cls_extra <- dplyr::case_when(
     src == "LinkedIn" ~ "is-linkedin",
     src == "Indeed" ~ "is-indeed",
@@ -392,7 +396,9 @@ render_source_logos <- function(sources){
 # Utilité : "Voir l'offre : logos cliquables vers l'URL
 render_source_logo_links <- function(sources, url){
   if (is.null(sources) || length(sources) == 0) return(NULL)
-  if (is.null(url) || !nzchar(url)) return(NULL)
+  url <- as.character(url %||% "")
+  url <- trimws(url[1])
+  if (!nzchar(url)) return(NULL)
   
   div(class = "offer-sources-links",
       lapply(sources, function(s){
@@ -1457,7 +1463,7 @@ server <- function(input, output, session) {
     toggle_slider("exp_salary_range", disabled = !sal_only)
     dur_ok <- dur_only && (contract %in% c("Stage", "CDD"))
     toggle_slider("exp_duration_range", disabled = !dur_ok)
-    if (tolower(contract) == "freelance") {
+    if (isTRUE(tolower(contract) == "freelance")) {
       set_text("exp_salary_title", "Fourchette de salaire (€ / h)")
     } else {
       set_text("exp_salary_title", "Fourchette de salaire (€ / mois)")
@@ -2669,7 +2675,7 @@ server <- function(input, output, session) {
     dur_ok <- dur_only && (contract %in% c("Stage", "CDD"))
     toggle_slider("mp_duration_range", disabled = !dur_ok)
     
-    if (tolower(contract) == "freelance") {
+    if (isTRUE(tolower(contract) == "freelance")) {
       set_text("mp_salary_title", "Fourchette de salaire (€ / h)")
     } else {
       set_text("mp_salary_title", "Fourchette de salaire (€ / mois)")
@@ -2687,7 +2693,7 @@ server <- function(input, output, session) {
   observeEvent(input$mp_contract, {
     req(input$mp_contract)
     
-    if (tolower(input$mp_contract) == "freelance") {
+    if (isTRUE(tolower(input$mp_contract) == "freelance")) {
       set_text("mp_salary_title", "Fourchette de salaire (€ /h)")
     } else {
       set_text("mp_salary_title", "Fourchette de salaire (€ /mois)")
@@ -2698,7 +2704,7 @@ server <- function(input, output, session) {
       return()
     }
     
-    if (tolower(input$mp_contract) == "freelance") {
+    if (isTRUE(tolower(input$mp_contract) == "freelance")) {
       hr <- get_hourly_range(jobs_df)
       mx <- max(hr$max[is.finite(hr$max)], na.rm = TRUE)
       if (is.finite(mx)) {
