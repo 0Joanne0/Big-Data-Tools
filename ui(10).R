@@ -117,7 +117,10 @@ navbarPage(
     # CSS et JS du projet
     tags$link(rel = "stylesheet", type = "text/css", href = "style.css"),
     tags$script(src = "script.js")
+    
   ),
+  
+  
   footer = app_footer(),
   
   # Page Acceuil ###############################################################
@@ -439,6 +442,7 @@ navbarPage(
                                     )
                                 ),
                                 
+                                
                                 ### Bouton Actualiser --------------------------
                                 actionButton("exp_apply_filters", 
                                              "Actualiser la recherche", 
@@ -448,7 +452,7 @@ navbarPage(
                      column(width = 9,
                             ## Partie offres -----------------------------------
                             div(class = "results-top",
-                                div(class = "view-toggle",
+                                div(class = "view-toggle is-list",
                                     radioButtons("exp_view",
                                                  label = NULL,
                                                  choices = c("Liste" = "list", "Carte" = "map"),
@@ -500,297 +504,162 @@ navbarPage(
   # Page Match Parfait #########################################################
   tabPanel("Match Parfait",
            div(class = "match-page",
-               ## Partie HERO ---------------------------------------------------------
+               
+               ## Partie HERO --------------------------------------------------
                tags$section(class = "match-hero",
                             div(class = "hero-inner",
                                 tags$h1("Diagnostic de Carrière"),
                                 tags$h2("Révélez votre potentiel : Analysez la compatibilité de votre profil avec vos objectifs métiers"),
-                                ## Partie recherche -------------------------------------
+                                
                                 div(class = "diagnostic-pill",
-                                    ### Profil ------------------------------------------
-                                    div(class = "profile-uploader",
-                                        div(class = "uploader-text", 
-                                            "Glissez votre CV (pdf)"
+                                    ### Profil ---------------------------------
+                                    div(class = "diag-seg diag-profile",
+                                        div(class = "diag-label", "Votre profil"
                                         ),
-                                        div(class = "uploader-sub", 
-                                            "ou"
-                                        ),
-                                        div(class = "mp-browse-btn", 
-                                            "Parcourir"
-                                        ),
-                                        div(class = "mp-cv-input",
-                                            fileInput("mp_cv", 
-                                                      label = NULL, 
-                                                      accept = c(".pdf"), 
-                                                      buttonLabel = "Parcourir")
+                                        # Zone de téléchargement
+                                        div(class = "profile-uploader mp-upload",
+                                            fileInput(
+                                              inputId = "mp_cv",
+                                              label   = NULL,
+                                              buttonLabel = "Parcourir",
+                                              placeholder = "ou glissez votre CV (pdf)",
+                                              accept = c(".pdf")
+                                            )
                                         )
+                                        
                                     ),
-                                    ### Objectif ----------------------------------------
+                                    ### Objectif -------------------------------
                                     div(class = "diag-seg diag-objective",
-                                        div(class = "diag-label", 
-                                            "Votre objectif"
-                                        ),
-                                        div(class = "diag-fields",
-                                            div(class = "diag-field",
+                                        div(class = "diag-label", "Votre objectif"),
+                                        div(class = "diag-fields search-pill mp-search-pill",
+                                            div(class = "diag-field search-seg",
                                                 icon("search"),
-                                                textInput("mp_title", 
-                                                          label = NULL,
-                                                          placeholder = "Intitulé du poste, mots clefs, entreprise...")
+                                                selectizeInput("mp_title",
+                                                               label = NULL,
+                                                               choices = NULL,
+                                                               multiple = TRUE,
+                                                               options = list(placeholder = "Métier, mot-clé, ou entreprise",
+                                                                              plugins = list("remove_button", "restore_on_backspace"),
+                                                                              create = FALSE,
+                                                                              persist = FALSE,
+                                                                              delimiter = ";",
+                                                                              maxOptions = 20,
+                                                                              openOnFocus = TRUE
+                                                                              )
+                                                               )
                                             ),
-                                            div(class = "diag-divider"),
-                                            div(class = "diag-field",
+                                            div(class = "diag-field search-seg",
                                                 icon("map-marker-alt"),
-                                                textInput("mp_loc", 
-                                                          label = NULL,
-                                                          placeholder = "Ville, département, code postal...")
+                                                selectizeInput(
+                                                  "mp_loc",
+                                                  label = NULL,
+                                                  choices = NULL,
+                                                  multiple = TRUE,
+                                                  options = list(
+                                                    placeholder = "Ville, département, code postal...",
+                                                    plugins = list("remove_button"),
+                                                    create = FALSE,
+                                                    persist = FALSE,
+                                                    openOnFocus = TRUE,
+                                                    maxOptions = 20
+                                                  )
+                                                )
                                             )
                                         )
                                     ),
+                                    
+                                    ### Bouton "LANCER L'ANALYSE" (Droite)
                                     div(class = "diag-actions",
                                         div(class = "mp-run-row",
-                                            actionButton("mp_run",
-                                                         "LANCER L'ANALYSE",
-                                                         class = "search-btn"
+                                            actionButton(
+                                              "mp_run",
+                                              "LANCER L'ANALYSE",
+                                              class = "search-btn"
                                             ),
-                                            div(id = "mp_run_spinner",
-                                                class = "mp-spinner",
-                                                `aria-hidden` = "true"
+                                            div(
+                                              id = "mp_run_spinner",
+                                              class = "mp-spinner",
+                                              `aria-hidden` = "true"
                                             )
                                         )
                                     )
+                                    
                                 )
                             )
                ),
+               
+               ########################## Reste de la page Match
                div(class = "explorer-wrap match-wrap",
                    fluidRow(
-                     ## Partie filtres ----------------------------------------------------
                      column(width = 3,
                             div(class = "filters-card",
-                                div(class = "filters-title", 
-                                    "Filtres avancés"),
-                                selectInput("mp_contract",
-                                            "Type de contrat",
-                                            choices = c("Tous", "CDI", "CDD", "Stage", "Alternance", "Freelance"),
-                                            selected = "Tous"),
+                                div(class = "filters-title", "Filtres avancés"),
+                                selectInput("mp_contract", "Type de contrat", choices = c("Tous", "CDI", "CDD", "Stage", "Alternance", "Freelance"), selected = "Tous"),
                                 conditionalPanel(condition = "input.mp_contract === 'Stage' || input.mp_contract === 'CDD'",
-                                                 div(class = "duration-block",
-                                                     div(class = "duration-title", 
-                                                         "Durée (mois)"
-                                                     ),
-                                                     div(class = "duration-toggle-row",
-                                                         span(class = "duration-toggle-text", 
-                                                              "Afficher uniquement les offres avec une durée"),
-                                                         div(class = "switch",
-                                                             tags$input(id = "mp_duration_only", 
-                                                                        type = "checkbox", 
-                                                                        class = "shiny-input-checkbox"),
-                                                             tags$label(`for` = "mp_duration_only", 
-                                                                        class = "switch-label")
-                                                         )
-                                                     ),
-                                                     div(id = "mp_duration_wrap",
-                                                         class = "salary-slider-wrap",
-                                                         sliderInput("mp_duration_range",
-                                                                     label = NULL,
-                                                                     min = 0, max = 24,
-                                                                     value = c(0, 24),
-                                                                     step = 1)
-                                                     )
-                                                 )
-                                ),
-                                selectInput("mp_experience_level",
-                                            "Niveau d’expérience",
-                                            choices = c("Tous" = "Tous",
-                                                        "Junior (≤ 2 ans)" = "junior",
-                                                        "Mid (3 à 6 ans)" = "mid",
-                                                        "Senior (≥ 7 an)" = "senior"),
-                                            selected = "Tous"),
-                                tags$div(style = "margin-top:10px;",
-                                         div(class = "salary-block",
-                                             div(id = "mp_salary_title", 
-                                                 class = "salary-title", 
-                                                 "Fourchette de salaire (€ /mois)"
-                                             ),
-                                             div(class = "salary-toggle-row",
-                                                 span(class = "salary-toggle-text", 
-                                                      "Afficher uniquement les offres avec un salaire"),
-                                                 div(class = "switch",
-                                                     tags$input(id = "mp_salary_only", 
-                                                                type = "checkbox", 
-                                                                class = "shiny-input-checkbox"),
-                                                     tags$label(`for` = "mp_salary_only", 
-                                                                class = "switch-label")
-                                                 )
-                                             ),
-                                             div(id = "mp_salary_wrap",
-                                                 class = "salary-slider-wrap",
-                                                 sliderInput("mp_salary_range",
-                                                             label = NULL,
-                                                             min = 0, max = 10000,
-                                                             value = c(0, 10000),
-                                                             step = 500)
-                                             )
-                                         )
-                                ),
-                                div(class = "toggle-row",
-                                    span(class = "salary-title", 
-                                         "Télétravail"),
-                                    div(class = "switch",
-                                        tags$input(id = "mp_remote", 
-                                                   type = "checkbox", 
-                                                   class = "shiny-input-checkbox"),
-                                        tags$label(`for` = "mp_remote", 
-                                                   class = "switch-label")
-                                    )
-                                ),
-                                selectizeInput("mp_sector",
-                                               label = "Secteur d’activité",
-                                               choices = NULL,
-                                               multiple = TRUE,
-                                               options = list(placeholder = "Tapez un secteur...",
-                                                              plugins = list("remove_button"),
-                                                              create = FALSE,
-                                                              persist = FALSE,
-                                                              openOnFocus = TRUE)
-                                ),
-                                selectInput("mp_company_category",
-                                            "Taille de l’entreprise",
-                                            choices = c("Tous" = "Tous",
-                                                        "Très petite entreprise (TPE) < 10" = "TPE",
-                                                        "Petite entreprise (PE) 10 - 49" = "PE",
-                                                        "Moyenne entreprise (ME) 50 - 249" = "ME",
-                                                        "Grande entreprise (GE) ≥ 250" = "GE"),
-                                            selected = "Tous"
-                                ),
-                                selectizeInput("mp_hard_skills", 
-                                               "Hard skills",
-                                               choices = NULL, 
-                                               multiple = TRUE,
-                                               options = list(placeholder = "Écrire une compétence...",
-                                                              plugins = list("remove_button"),
-                                                              create = TRUE,
-                                                              persist = FALSE,
-                                                              openOnFocus = TRUE)
-                                ),
-                                selectizeInput("mp_soft_skills", 
-                                               "Soft skills",
-                                               choices = NULL,
-                                               multiple = TRUE,
-                                               options = list(placeholder = "Écrire une compétence...",
-                                                              plugins = list("remove_button"),
-                                                              create = TRUE,
-                                                              persist = FALSE,
-                                                              openOnFocus = TRUE)
-                                ),
-                                selectizeInput("mp_advantages",
-                                               "Avantages",
-                                               choices = NULL,
-                                               multiple = TRUE,
-                                               options = list(placeholder = "Écrire un avantage...",
-                                                              plugins = list("remove_button"),
-                                                              create = TRUE,
-                                                              persist = FALSE,
-                                                              openOnFocus = TRUE)
-                                ),
-                                selectInput("mp_date",
-                                            "Date de publication",
-                                            choices = c("Toutes", "Depuis 24h", "Depuis 3 jours", "Depuis 1 semaine", "Depuis 1 mois"),
-                                            selected = "Toutes"
-                                ),
+                                                 div(class = "duration-block", div(class = "duration-title", "Durée (mois)"), div(class = "duration-toggle-row", span(class = "duration-toggle-text", "Afficher uniquement les offres avec une durée"), div(class = "switch", tags$input(id = "mp_duration_only", type = "checkbox", class = "shiny-input-checkbox"), tags$label(`for` = "mp_duration_only", class = "switch-label"))), div(id = "mp_duration_wrap", class = "salary-slider-wrap", sliderInput("mp_duration_range", label = NULL, min = 0, max = 24, value = c(0, 24), step = 1)))),
+                                selectInput("mp_experience_level", "Niveau d’expérience", choices = c("Tous" = "Tous", "Junior (≤ 2 ans)" = "junior", "Mid (3 à 6 ans)" = "mid", "Senior (≥ 7 an)" = "senior"), selected = "Tous"),
+                                tags$div(style = "margin-top:10px;", div(class = "salary-block", div(id = "mp_salary_title", class = "salary-title", "Fourchette de salaire (€ /mois)"), div(class = "salary-toggle-row", span(class = "salary-toggle-text", "Afficher uniquement les offres avec un salaire"), div(class = "switch", tags$input(id = "mp_salary_only", type = "checkbox", class = "shiny-input-checkbox"), tags$label(`for` = "mp_salary_only", class = "switch-label"))), div(id = "mp_salary_wrap", class = "salary-slider-wrap", sliderInput("mp_salary_range", label = NULL, min = 0, max = 10000, value = c(0, 10000), step = 500)))),
+                                div(class = "toggle-row", span(class = "salary-title", "Télétravail"), div(class = "switch", tags$input(id = "mp_remote", type = "checkbox", class = "shiny-input-checkbox"), tags$label(`for` = "mp_remote", class = "switch-label"))),
+                                selectizeInput("mp_sector", label = "Secteur d’activité", choices = NULL, multiple = TRUE, options = list(placeholder = "Tapez un secteur...", plugins = list("remove_button"), create = FALSE, persist = FALSE, openOnFocus = TRUE)),
+                                selectInput("mp_company_category", "Taille de l’entreprise", choices = c("Tous" = "Tous", "Très petite entreprise (TPE) < 10" = "TPE", "Petite entreprise (PE) 10 - 49" = "PE", "Moyenne entreprise (ME) 50 - 249" = "ME", "Grande entreprise (GE) ≥ 250" = "GE"), selected = "Tous"),
+                                selectizeInput("mp_hard_skills", "Hard skills", choices = NULL, multiple = TRUE, options = list(placeholder = "Écrire une compétence...", plugins = list("remove_button"), create = TRUE, persist = FALSE, openOnFocus = TRUE)),
+                                selectizeInput("mp_soft_skills", "Soft skills", choices = NULL, multiple = TRUE, options = list(placeholder = "Écrire une compétence...", plugins = list("remove_button"), create = TRUE, persist = FALSE, openOnFocus = TRUE)),
+                                selectizeInput("mp_advantages", "Avantages", choices = NULL, multiple = TRUE, options = list(placeholder = "Écrire un avantage...", plugins = list("remove_button"), create = TRUE, persist = FALSE, openOnFocus = TRUE)),
+                                selectInput("mp_date", "Date de publication", choices = c("Toutes", "Depuis 24h", "Depuis 3 jours", "Depuis 1 semaine", "Depuis 1 mois"), selected = "Toutes"),
+                                ###div(class = "filter-block", div(class = "salary-title", "Source de l’offre"), div(id = "mp_source_grid", class = "source-grid", div(class = "sg-item", checkboxInput("mp_source_all", "Tous", value = TRUE)), div(class = "sg-item", checkboxInput("mp_source_li", "LinkedIn", value = TRUE)), div(class = "sg-item", checkboxInput("mp_source_in", "Indeed", value = TRUE)), div(class = "sg-item", checkboxInput("mp_source_wttj", "Welcome to the Jungle", value = TRUE)))),
                                 div(class = "filter-block",
-                                    div(class = "salary-title", 
-                                        "Source de l’offre"),
-                                    div(id = "mp_source_grid", 
-                                        class = "source-grid",
-                                        div(class = "sg-item", 
-                                            checkboxInput("mp_source_all", "Tous",
-                                                          value = TRUE)
+                                    div(class = "salary-title", "Source de l’offre"),
+                                    div(id = "exp_source_grid", class = "source-grid",
+                                        div(class = "sg-item",
+                                            checkboxInput("exp_source_all", "Tous", value = TRUE)
                                         ),
-                                        div(class = "sg-item", 
-                                            checkboxInput("mp_source_li",  "LinkedIn",
-                                                          value = TRUE)
+                                        div(class = "sg-item",
+                                            checkboxInput("exp_source_li",  "LinkedIn", value = TRUE)
                                         ),
-                                        div(class = "sg-item", 
-                                            checkboxInput("mp_source_in",  "Indeed",
-                                                          value = TRUE)
+                                        div(class = "sg-item",
+                                            checkboxInput("exp_source_in",  "Indeed",   value = TRUE)
                                         ),
-                                        div(class = "sg-item", 
-                                            checkboxInput("mp_source_wttj",  "Welcome to the Jungle",
-                                                          value = TRUE)
+                                        div(class = "sg-item",
+                                            checkboxInput("exp_source_wttj",  "Welcome to the Jungle",value = TRUE)
                                         )
                                     )
-                                ),
-                                actionButton("mp_apply_filters", 
-                                             "Actualiser la recherche", 
-                                             class = "apply-btn w-100")
+                                ),####Fin 
+                                actionButton("mp_apply_filters", "Actualiser la recherche", class = "apply-btn w-100")
                             )
                      ),
                      column(width = 9,
-                            ## Partie Dashboard ------------------------------------------------
                             div(class = "mp-dashboard",
-                                div(class = "mp-dashboard-title", 
-                                    "DASHBOARD DIAGNOSTIC"),
+                                div(class = "mp-dashboard-title", "DASHBOARD DIAGNOSTIC"),
                                 div(class = "mp-dash-grid",
-                                    div(class = "mp-dash-left",
-                                        plotly::plotlyOutput("mp_radar", height = "260px")
-                                    ),
-                                    div(
-                                      class = "mp-dash-right",
-                                      uiOutput("mp_advice")
-                                    )
+                                    div(class = "mp-dash-left", uiOutput("mp_radar_box")
+                                        ),
+                                    
+                                    div(class = "mp-dash-right", uiOutput("mp_advice"))
                                 )
                             ),
-                            
-                            ## Partie recommandations ------------------------------------------
                             div(class = "mp-reco-wrap",
                                 div(class = "mp-reco-head",
-                                    tags$h2("RECOMMANDATIONS  POUR VOUS"),
-                                    tags$p("Voici les offres du marché qui correspondent le mieux à votre profil et à votre objectif de carrière actuel.")
-                                ),
-                                div(class = "results-top",
-                                    div(id = "mp_view_toggle",
-                                        class = "view-toggle is-list",
-                                        radioButtons("mp_view",
-                                                     label = NULL,
-                                                     choices = c("Liste" = "list", "Carte" = "map"),
-                                                     selected = "list",
-                                                     inline = TRUE)
+                                    div(class="mp-reco-left",
+                                        tags$h2("RECOMMANDATIONS  POUR VOUS"),
+                                        tags$p("Voici les offres du marché qui correspondent le mieux à votre profil.")
                                     ),
-                                    div(class = "meta-right",
-                                        textOutput("mp_count", 
-                                                   inline = TRUE),
+                                    div(class="mp-reco-right",
+                                        textOutput("mp_count", inline = TRUE),
                                         div(style = "width: 250px;",
-                                            selectInput("mp_sort",
-                                                        label = NULL,
-                                                        choices = c("Trier" = "relevance",
-                                                                    "Date : ordre décroissant" = "date_desc",
-                                                                    "Date : ordre croissant" = "date_asc",
-                                                                    "Salaire : ordre décroissant" = "salary_desc",
-                                                                    "Salaire : ordre croissant"  = "salary_asc"),
-                                                        selected = "match")
+                                            selectInput("mp_sort", label = NULL,
+                                                        choices = c(
+                                                          "Trier" = "relevance",
+                                                          "Date : ordre décroissant" = "date_desc",
+                                                          "Date : ordre croissant" = "date_asc",
+                                                          "Salaire : ordre décroissant" = "salary_desc",
+                                                          "Salaire : ordre croissant"  = "salary_asc"
+                                                        ),
+                                                        selected = "relevance"
+                                            )
                                         )
                                     )
                                 ),
-                                conditionalPanel(condition = "input.mp_view === 'list'",
-                                                 uiOutput("mp_results_list")
-                                ),
-                                conditionalPanel(
-                                  condition = "input.mp_view === 'map'",
-                                  div(class = "map-wrapper",
-                                      leafletOutput("mp_map", height = "650px")
-                                  ),
-                                  
-                                  tags$p(
-                                    class = "map-note",
-                                    "Note : les offres en 100% télétravail ne sont pas affichées sur la carte car elles n’ont pas de localisation."
-                                  ),
-                                  
-                                  div(style = "margin-top: 16px;",
-                                      uiOutput("mp_results_list"),
-                                      uiOutput("exp_pager") 
-                                  )
-                                )
-                                
+                                uiOutput("mp_list")
                             )
                      )
                    )
@@ -865,6 +734,5 @@ navbarPage(
            )
   )
 )
-
 
 
