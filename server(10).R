@@ -3425,14 +3425,21 @@ server <- function(input, output, session) {
     # Points forts = Top 3 très demandés ET présents dans le CV (ou sélection si CV vide)
     strong <- character(0)
     if (nrow(freq_all) > 0) {
-      strong <- freq_all[isTRUE(in_cv) | in_cv == TRUE][order(-N)][1:3, label]
+      # Convertit en data.frame pour éviter toute ambiguïté data.table sur j/i
+      ff <- as.data.frame(freq_all)
+      ff_in  <- ff[isTRUE(ff$in_cv) | ff$in_cv == TRUE, , drop = FALSE]
+      ff_in  <- ff_in[order(-ff_in$N), , drop = FALSE]
+      strong <- head(ff_in$label, 3)
     }
     strong <- strong[!is.na(strong) & nzchar(strong)]
     
     # Axes de progression = Top 3 très demandés MAIS absents du CV (ou sélection si CV vide)
     missing <- character(0)
     if (nrow(freq_all) > 0) {
-      missing <- freq_all[!(in_cv %in% TRUE)][order(-N)][1:3, label]
+      ff <- as.data.frame(freq_all)
+      ff_out <- ff[!(ff$in_cv %in% TRUE), , drop = FALSE]
+      ff_out <- ff_out[order(-ff_out$N), , drop = FALSE]
+      missing <- head(ff_out$label, 3)
     }
     missing <- missing[!is.na(missing) & nzchar(missing)]
     
